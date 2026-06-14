@@ -1,0 +1,436 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="dark">
+<title>DC Weekends — Family Events Planner</title>
+<style>
+:root{
+  --bg:#0d0e11; --panel:#15171c; --panel2:#1c1f26; --line:#262a31;
+  --ink:#e9e6df; --ink-soft:#c6c2b9; --ink-dim:#9a958a; --ink-faint:#67635b;
+  --gold:#c8a96e; --gold-dim:rgba(200,169,110,.13);
+  --red:#e25b5b;
+  --cat-outdoor:#82b07f; --cat-music:#a98fd1; --cat-theater:#cf7f92;
+  --cat-comedy:#d99a5e; --cat-museums-culture:#7fa3cf; --cat-arts:#c87fb4;
+  --cat-sports-active:#6fbcb2; --cat-biking:#aebd6e; --cat-food-markets:#d0a956;
+  --cat-family-teens:#6fc3d4;
+  --mono:ui-monospace,"SF Mono",SFMono-Regular,Menlo,Consolas,"Liberation Mono",monospace;
+  --serif:"Iowan Old Style",Palatino,Georgia,"Times New Roman",serif;
+  --sans:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"Helvetica Neue",Arial,sans-serif;
+}
+*{box-sizing:border-box}
+html{scroll-behavior:smooth}
+body{margin:0;background:var(--bg);color:var(--ink);font-family:var(--sans);-webkit-font-smoothing:antialiased}
+.wrap{max-width:680px;margin:0 auto}
+
+/* ---------- masthead ---------- */
+.masthead{padding:30px 16px 16px;border-bottom:1px solid var(--line)}
+.masthead .kicker{font-family:var(--mono);font-size:10px;letter-spacing:.22em;text-transform:uppercase;color:var(--gold);margin:0 0 6px}
+.masthead h1{font-family:var(--serif);font-size:36px;line-height:1;margin:0;font-weight:700;letter-spacing:-.01em}
+.masthead h1 em{color:var(--gold);font-style:italic}
+.masthead .tagline{font-family:var(--mono);font-size:10.5px;letter-spacing:.14em;text-transform:uppercase;color:var(--ink-dim);margin:10px 0 0}
+#banner{display:none;font-family:var(--mono);font-size:10.5px;letter-spacing:.1em;text-transform:uppercase;color:var(--gold);background:var(--gold-dim);border:1px solid rgba(200,169,110,.35);border-radius:6px;padding:7px 10px;margin-top:12px}
+#banner.on{display:block}
+
+/* ---------- sticky controls ---------- */
+.controls{position:sticky;top:0;z-index:20;background:rgba(13,14,17,.94);backdrop-filter:blur(10px);-webkit-backdrop-filter:blur(10px);border-bottom:1px solid var(--line)}
+.row{display:flex;gap:8px;overflow-x:auto;padding:10px 16px 0;scrollbar-width:none}
+.row::-webkit-scrollbar{display:none}
+.row:last-child{padding-bottom:12px}
+.row button{flex:0 0 auto;cursor:pointer;-webkit-tap-highlight-color:transparent}
+
+.wk{font-family:var(--mono);font-size:11px;letter-spacing:.08em;text-transform:uppercase;color:var(--ink-dim);background:var(--panel);border:1px solid var(--line);border-radius:999px;padding:9px 14px;min-height:38px}
+.wk.on{color:var(--gold);border-color:var(--gold);background:var(--gold-dim)}
+
+.tab{font-family:var(--mono);font-size:11px;letter-spacing:.08em;text-transform:uppercase;color:var(--ink-dim);background:none;border:none;border-bottom:2px solid transparent;padding:9px 4px 8px;min-height:38px}
+.tab.on{color:var(--gold);border-bottom-color:var(--gold)}
+
+.hood{font-size:11.5px;color:var(--ink-dim);background:none;border:1px solid var(--line);border-radius:6px;padding:7px 10px;min-height:34px}
+.hood.on{color:var(--ink);border-color:#3d434d;background:var(--panel2)}
+.hood.on::before{content:"";display:inline-block;width:6px;height:6px;border-radius:50%;background:var(--gold);margin-right:7px;vertical-align:1px}
+.hood.wtt{border-style:dashed}
+.hood.wtt.on{color:var(--gold);border-color:var(--gold)}
+
+/* ---------- cards ---------- */
+main{padding:14px 16px 8px;display:flex;flex-direction:column;gap:12px}
+.card{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:14px 14px 11px}
+.card-top{display:flex;flex-wrap:wrap;gap:6px;align-items:center}
+.chip{font-family:var(--mono);font-size:9.5px;letter-spacing:.12em;text-transform:uppercase;border:1px solid currentColor;border-radius:4px;padding:2.5px 7px}
+.badge{font-family:var(--mono);font-size:9.5px;letter-spacing:.1em;text-transform:uppercase;border-radius:4px;padding:3px 7px}
+.b-free{color:#85cf93;background:rgba(105,181,120,.14)}
+.b-low{color:var(--gold);background:var(--gold-dim)}
+.b-teens{color:#8fbce4;background:rgba(111,167,217,.13)}
+.b-age{color:#ff9090;background:rgba(226,91,91,.16);border:1px solid rgba(226,91,91,.45)}
+.card h2{font-family:var(--serif);font-size:19.5px;line-height:1.2;margin:9px 0 3px;font-weight:700}
+.when{font-family:var(--mono);font-size:11.5px;letter-spacing:.04em;color:var(--gold);margin:0 0 3px}
+.where{font-size:12.5px;color:var(--ink-dim);margin:0 0 7px}
+.desc{font-size:13.5px;line-height:1.5;color:var(--ink-soft);margin:0 0 11px}
+.card-foot{display:flex;align-items:center;justify-content:space-between;gap:10px;border-top:1px solid var(--line);padding-top:10px}
+.price{font-family:var(--mono);font-size:11.5px;color:var(--ink-dim);min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.acts{display:flex;gap:8px;flex:0 0 auto}
+.btn{font-family:var(--mono);font-size:10.5px;letter-spacing:.08em;text-transform:uppercase;color:var(--ink);background:var(--panel2);border:1px solid var(--line);border-radius:8px;padding:9px 12px;min-height:38px;text-decoration:none;display:inline-flex;align-items:center;cursor:pointer;-webkit-tap-highlight-color:transparent}
+.btn:hover{border-color:var(--gold);color:var(--gold)}
+.star{font-size:17px;line-height:1;color:var(--ink-faint);background:none;border:1px solid var(--line);border-radius:8px;padding:8px 11px;min-height:38px;cursor:pointer}
+.star.faved{color:var(--gold);border-color:var(--gold);background:var(--gold-dim)}
+
+.divider{display:flex;align-items:center;gap:10px;font-family:var(--mono);font-size:9.5px;letter-spacing:.22em;text-transform:uppercase;color:var(--ink-faint);margin:6px 0 -2px}
+.divider::before,.divider::after{content:"";flex:1;height:1px;background:var(--line)}
+
+.empty{text-align:center;font-family:var(--mono);font-size:12px;color:var(--ink-dim);background:var(--panel);border:1px dashed var(--line);border-radius:10px;padding:34px 18px;line-height:1.8}
+
+footer{font-family:var(--mono);font-size:10px;letter-spacing:.12em;text-transform:uppercase;color:var(--ink-faint);text-align:center;padding:26px 16px 40px}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header class="masthead">
+    <p class="kicker">The Family Field Guide</p>
+    <h1>DC <em>Weekends</em></h1>
+    <p class="tagline">What's on · Sat &amp; Sun · Pick a weekend, pick a vibe</p>
+    <div id="banner"></div>
+  </header>
+
+  <div class="controls" id="controls">
+    <nav class="row" id="weekends" aria-label="Pick a weekend"></nav>
+    <nav class="row" id="tabs" aria-label="Filter by category"></nav>
+    <nav class="row" id="hoods" aria-label="Filter by neighborhood"></nav>
+  </div>
+
+  <main id="cards" aria-live="polite"></main>
+  <footer id="foot"></footer>
+</div>
+
+<script>
+"use strict";
+/*__LOGIC_START__*/
+// ---------------------------------------------------------------------------
+// Pure logic — mirrors README.md / SCHEMA.md exactly. No DOM in this block.
+// ---------------------------------------------------------------------------
+var CATEGORIES = [
+  ["all", "All"],
+  ["free-lowcost", "Free & Low-Cost"],
+  ["outdoor", "Outdoor"],
+  ["music", "Music & Concerts"],
+  ["theater", "Theater & Performances"],
+  ["comedy", "Comedy & Standup"],
+  ["museums-culture", "Museums & Culture"],
+  ["arts", "Arts & Galleries"],
+  ["sports-active", "Sports & Active"],
+  ["biking", "Biking & Trails"],
+  ["food-markets", "Food & Markets"],
+  ["family-teens", "Family & Teens"]
+];
+var CHIP_LABEL = {
+  "outdoor": "Outdoor", "music": "Music", "theater": "Theater", "comedy": "Comedy",
+  "museums-culture": "Museums", "arts": "Arts", "sports-active": "Active",
+  "biking": "Biking", "food-markets": "Food", "family-teens": "Family"
+};
+var CORE_HOODS = ["Capitol Hill", "Southwest / The Wharf", "Navy Yard / Ballpark", "Downtown / National Mall"];
+var ALL_DC_HOODS = ["U Street", "H Street NE", "Other DC"];
+
+// README.md — category tab filter (verbatim logic)
+function matchesTab(ev, tab) {
+  if (tab === "all") return true;
+  if (tab === "free-lowcost") return ev.isFree || ev.isLowCost;
+  if (tab === "family-teens") return ev.goodForTeens;
+  return ev.category === tab;
+}
+
+// README.md / SCHEMA.md — weekend date logic (verbatim)
+function showsThisWeekend(ev, satDate, sunDate) {
+  if (ev.eventType === "recurring") return true;
+  if (ev.eventType === "single") return ev.date === satDate || ev.date === sunDate;
+  if (ev.eventType === "run") return ev.startDate <= sunDate && ev.endDate >= satDate;
+  return false;
+}
+
+// Neighborhood filter: worthTheTrip events only when the toggle is on;
+// everything else must be in the active neighborhood set.
+function passesHoods(ev, activeHoods, wttOn) {
+  if (ev.worthTheTrip) return wttOn;
+  return activeHoods.indexOf(ev.neighborhood) !== -1;
+}
+
+function sundayOf(satISO) {
+  var d = new Date(satISO + "T12:00:00Z");
+  d.setUTCDate(d.getUTCDate() + 1);
+  return d.toISOString().slice(0, 10);
+}
+
+function addOneDay(yyyymmdd) {            // YYYYMMDD -> YYYYMMDD (GCal end is exclusive)
+  var iso = yyyymmdd.slice(0, 4) + "-" + yyyymmdd.slice(4, 6) + "-" + yyyymmdd.slice(6, 8);
+  var d = new Date(iso + "T12:00:00Z");
+  d.setUTCDate(d.getUTCDate() + 1);
+  return d.toISOString().slice(0, 10).split("-").join("");
+}
+
+// README.md — Google Calendar URL builder (verbatim)
+function gcalUrl(ev, weekendSat, weekendSun) {
+  // Pick the date: single -> ev.date; recurring -> the selected Saturday;
+  // run -> the selected Saturday (the weekend they're planning).
+  var day = ev.eventType === "single" ? ev.date : weekendSat;
+  // All-day event spanning that day (no reliable end time in data).
+  var start = day.split("-").join("");                   // YYYYMMDD
+  var end = addOneDay(start);                            // GCal end is exclusive
+  var text = encodeURIComponent(ev.title);
+  var details = encodeURIComponent(
+    ev.description + "\n\n" + (ev.time || "") + "\n" + (ev.price || "") + "\nMore: " + ev.url);
+  var loc = encodeURIComponent(ev.venue + ", Washington DC");
+  return "https://calendar.google.com/calendar/render?action=TEMPLATE"
+       + "&text=" + text + "&dates=" + start + "/" + end + "&details=" + details + "&location=" + loc
+       + "&ctz=America/New_York";
+}
+
+// Index of the weekend to label "This Weekend": first whose Sunday hasn't passed.
+function nearestWeekendIndex(weekStarts, todayISO) {
+  for (var i = 0; i < weekStarts.length; i++) {
+    if (sundayOf(weekStarts[i]) >= todayISO) return i;
+  }
+  return weekStarts.length - 1;
+}
+
+// Fallback when only recurring.json exists (before the first Action run).
+function nextSaturdays(fromISO, n) {
+  var d = new Date(fromISO + "T12:00:00Z");
+  var out = [];
+  while (out.length < n) {
+    if (d.getUTCDay() === 6) out.push(d.toISOString().slice(0, 10));
+    d.setUTCDate(d.getUTCDate() + 1);
+  }
+  return out;
+}
+
+// Display order within a weekend: dated singles first, then runs, then always-on.
+function orderForDisplay(list) {
+  var singles = list.filter(function (e) { return e.eventType === "single"; })
+    .sort(function (a, b) { return a.date < b.date ? -1 : a.date > b.date ? 1 : a.title.localeCompare(b.title); });
+  var runs = list.filter(function (e) { return e.eventType === "run"; })
+    .sort(function (a, b) { return a.endDate < b.endDate ? -1 : 1; });
+  var rec = list.filter(function (e) { return e.eventType === "recurring"; });
+  return { singles: singles, runs: runs, recurring: rec };
+}
+/*__LOGIC_END__*/
+
+// ---------------------------------------------------------------------------
+// State + rendering
+// ---------------------------------------------------------------------------
+var FAV_KEY = "dcweekends.favs.v1";
+var state = {
+  data: null,
+  weekend: 0,           // index into weekStartsCovered
+  tab: "all",           // category key, or "saved"
+  hoods: {},            // core hood -> bool
+  allDC: false,
+  wtt: false,
+  favs: []
+};
+CORE_HOODS.forEach(function (h) { state.hoods[h] = true; });
+
+function loadFavs() {
+  try { var v = JSON.parse(localStorage.getItem(FAV_KEY) || "[]"); return Array.isArray(v) ? v : []; }
+  catch (e) { return []; }
+}
+function saveFavs() {
+  try { localStorage.setItem(FAV_KEY, JSON.stringify(state.favs)); } catch (e) { /* private mode etc. */ }
+}
+function isFaved(id) { return state.favs.indexOf(id) !== -1; }
+function toggleFav(id) {
+  var i = state.favs.indexOf(id);
+  if (i === -1) state.favs.push(id); else state.favs.splice(i, 1);
+  saveFavs();
+}
+
+function activeHoodList() {
+  var out = CORE_HOODS.filter(function (h) { return state.hoods[h]; });
+  if (state.allDC) out = out.concat(ALL_DC_HOODS);
+  return out;
+}
+
+function todayNY() {
+  return new Date().toLocaleDateString("en-CA", { timeZone: "America/New_York" });
+}
+
+function esc(s) {
+  return String(s == null ? "" : s).replace(/[&<>"']/g, function (c) {
+    return { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c];
+  });
+}
+
+function fmtDay(iso, withWeekday) {
+  var d = new Date(iso + "T12:00:00Z");
+  var o = withWeekday ? { weekday: "short", month: "short", day: "numeric", timeZone: "UTC" }
+                      : { month: "short", day: "numeric", timeZone: "UTC" };
+  return d.toLocaleDateString("en-US", o);
+}
+
+function whenText(ev) {
+  if (ev.eventType === "recurring") return "Every weekend";
+  if (ev.eventType === "run") return "Now through " + fmtDay(ev.endDate);
+  return fmtDay(ev.date, true);
+}
+
+function badgesHtml(ev) {
+  var b = "";
+  if (ev.isFree) b += '<span class="badge b-free">Free</span>';
+  if (ev.isLowCost && !ev.isFree) b += '<span class="badge b-low">Low-cost</span>';
+  if (ev.goodForTeens) b += '<span class="badge b-teens">Teens OK</span>';
+  if (ev.ageRestriction === "18+" || ev.ageRestriction === "21+")
+    b += '<span class="badge b-age">' + esc(ev.ageRestriction) + '</span>';
+  return b;
+}
+
+function cardHtml(ev) {
+  var catColor = "var(--cat-" + ev.category + ", var(--ink-dim))";
+  var safeUrl = /^https?:\/\//i.test(ev.url || "") ? ev.url : "#";
+  var faved = isFaved(ev.id);
+  return '<article class="card" data-id="' + esc(ev.id) + '">' +
+    '<div class="card-top">' +
+      '<span class="chip" style="color:' + catColor + '">' + esc(CHIP_LABEL[ev.category] || ev.category) + '</span>' +
+      badgesHtml(ev) +
+    '</div>' +
+    '<h2>' + esc(ev.title) + '</h2>' +
+    '<p class="when">' + esc(whenText(ev)) + (ev.time ? " · " + esc(ev.time) : "") + '</p>' +
+    '<p class="where">' + esc(ev.venue) + ' — ' + esc(ev.neighborhood) + '</p>' +
+    '<p class="desc">' + esc(ev.description) + '</p>' +
+    '<div class="card-foot">' +
+      '<span class="price">' + esc(ev.price || "") + '</span>' +
+      '<div class="acts">' +
+        '<button class="star' + (faved ? " faved" : "") + '" data-act="fav" aria-pressed="' + faved + '" aria-label="Save ' + esc(ev.title) + '">' + (faved ? "★" : "☆") + '</button>' +
+        '<button class="btn" data-act="cal" aria-label="Add ' + esc(ev.title) + ' to Google Calendar">+ Cal</button>' +
+        '<a class="btn" href="' + esc(safeUrl) + '" target="_blank" rel="noopener">↗ Info</a>' +
+      '</div>' +
+    '</div>' +
+  '</article>';
+}
+
+function visibleEvents() {
+  var ws = state.data.weekStartsCovered;
+  var sat = ws[state.weekend], sun = sundayOf(sat);
+  var evs = state.data.events;
+  if (state.tab === "saved") {
+    return evs.filter(function (e) { return isFaved(e.id); });
+  }
+  var hoods = activeHoodList();
+  return evs.filter(function (e) {
+    return showsThisWeekend(e, sat, sun) && matchesTab(e, state.tab) && passesHoods(e, hoods, state.wtt);
+  });
+}
+
+function renderControls() {
+  var ws = state.data.weekStartsCovered;
+  var nearest = nearestWeekendIndex(ws, todayNY());
+  document.getElementById("weekends").innerHTML = ws.map(function (sat, i) {
+    var label = i === nearest ? "This Weekend"
+      : fmtDay(sat) + "–" + fmtDay(sundayOf(sat)).replace(/^[A-Za-z]+ /, "");
+    return '<button class="wk' + (i === state.weekend ? " on" : "") + '" data-wk="' + i + '">' + label + '</button>';
+  }).join("");
+
+  var savedCount = state.favs.length;
+  document.getElementById("tabs").innerHTML = CATEGORIES.map(function (c) {
+    return '<button class="tab' + (state.tab === c[0] ? " on" : "") + '" data-tab="' + c[0] + '">' + c[1] + '</button>';
+  }).join("") +
+  '<button class="tab' + (state.tab === "saved" ? " on" : "") + '" data-tab="saved">★ Saved' + (savedCount ? " (" + savedCount + ")" : "") + '</button>';
+
+  document.getElementById("hoods").innerHTML =
+    CORE_HOODS.map(function (h) {
+      return '<button class="hood' + (state.hoods[h] ? " on" : "") + '" data-hood="' + esc(h) + '" aria-pressed="' + !!state.hoods[h] + '">' + esc(h) + '</button>';
+    }).join("") +
+    '<button class="hood' + (state.allDC ? " on" : "") + '" data-hood="__alldc" aria-pressed="' + state.allDC + '">All DC</button>' +
+    '<button class="hood wtt' + (state.wtt ? " on" : "") + '" data-hood="__wtt" aria-pressed="' + state.wtt + '">Worth the Trip</button>';
+}
+
+function renderCards() {
+  var groups = orderForDisplay(visibleEvents());
+  var html = groups.singles.map(cardHtml).join("") + groups.runs.map(cardHtml).join("");
+  if (groups.recurring.length) {
+    html += '<div class="divider">Always on weekends</div>' + groups.recurring.map(cardHtml).join("");
+  }
+  if (!html) {
+    html = '<div class="empty">' + (state.tab === "saved"
+      ? "Nothing saved yet.<br>Tap ☆ on any event to build your shortlist."
+      : "Nothing matches these filters.<br>Try “All DC”, another tab, or another weekend.") + '</div>';
+  }
+  document.getElementById("cards").innerHTML = html;
+}
+
+function render() { renderControls(); renderCards(); }
+
+// ---------------------------------------------------------------------------
+// Events
+// ---------------------------------------------------------------------------
+document.getElementById("controls").addEventListener("click", function (e) {
+  var b = e.target.closest("button");
+  if (!b) return;
+  if (b.dataset.wk !== undefined) state.weekend = +b.dataset.wk;
+  else if (b.dataset.tab) state.tab = b.dataset.tab;
+  else if (b.dataset.hood === "__alldc") state.allDC = !state.allDC;
+  else if (b.dataset.hood === "__wtt") state.wtt = !state.wtt;
+  else if (b.dataset.hood) state.hoods[b.dataset.hood] = !state.hoods[b.dataset.hood];
+  render();
+});
+
+document.getElementById("cards").addEventListener("click", function (e) {
+  var b = e.target.closest("button");
+  if (!b) return;
+  var card = b.closest(".card");
+  if (!card) return;
+  var ev = state.data.events.find(function (x) { return x.id === card.dataset.id; });
+  if (!ev) return;
+  if (b.dataset.act === "fav") { toggleFav(ev.id); render(); }
+  if (b.dataset.act === "cal") {
+    var sat = state.data.weekStartsCovered[state.weekend];
+    window.open(gcalUrl(ev, sat, sundayOf(sat)), "_blank", "noopener");
+  }
+});
+
+// ---------------------------------------------------------------------------
+// Boot
+// ---------------------------------------------------------------------------
+function setBanner(msg) {
+  var el = document.getElementById("banner");
+  if (msg) { el.textContent = msg; el.classList.add("on"); } else { el.classList.remove("on"); }
+}
+
+function fetchJson(url) {
+  return fetch(url, { cache: "no-store" }).then(function (r) {
+    if (!r.ok) throw new Error(url + " -> " + r.status);
+    return r.json();
+  });
+}
+
+(function boot() {
+  state.favs = loadFavs();
+  var wantSample = new URLSearchParams(location.search).get("data") === "sample";
+
+  var load = wantSample
+    ? fetchJson("events-sample.json").then(function (d) { setBanner("Sample data — test fixture, not live listings"); return d; })
+    : fetchJson("events.json").catch(function () {
+        // Before the first Action run: fall back to the always-on recurring layer.
+        return fetchJson("recurring.json").then(function (rec) {
+          setBanner("Live listings not published yet — showing always-on spots");
+          return {
+            generatedAt: null,
+            weekStartsCovered: nextSaturdays(todayNY(), 6),
+            lastTheaterRefresh: null,
+            events: rec.events
+          };
+        });
+      });
+
+  load.then(function (data) {
+    state.data = data;
+    state.weekend = nearestWeekendIndex(data.weekStartsCovered, todayNY());
+    var foot = [];
+    if (data.generatedAt) foot.push("Listings updated " + fmtDay(data.generatedAt.slice(0, 10)));
+    if (data.lastTheaterRefresh) foot.push("Shows as of " + fmtDay(data.lastTheaterRefresh.slice(0, 10)));
+    document.getElementById("foot").textContent = foot.join(" · ") || "DC Weekends";
+    render();
+  }).catch(function (err) {
+    document.getElementById("cards").innerHTML =
+      '<div class="empty">Couldn’t load events data.<br>' + esc(err.message) + "</div>";
+  });
+})();
+</script>
+</body>
+</html>
