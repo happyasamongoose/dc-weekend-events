@@ -407,12 +407,57 @@ export function sortForFile(events) {
 // Model response parsing — strip stray fences, slice to the JSON array
 // ---------------------------------------------------------------------------
 export function parseEventArray(text) {
-  let t = String(text).replace(/```(?:json)?/gi, "").trim();
-  const a = t.indexOf("["), b = t.lastIndexOf("]");
-  if (a === -1 || b === -1 || b < a) throw new Error("no JSON array in model output");
-  const arr = JSON.parse(t.slice(a, b + 1));
-  if (!Array.isArray(arr)) throw new Error("model output is not an array");
-  return arr;
+  // The model is told to emit ONLY a JSON array, but real responses sometimes
+  // wrap it in ``` fences, prepend/append prose, or include stray brackets
+  // (citations like [1], "[free]") that fooled the naive indexOf/lastIndexOf approach.
+  // Strategy: strip fences, then find the FIRST balanced, string-aware top-level
+  // array and JSON.parse exactly that span. If the first balanced span fails to
+  // parse, keep scanning (largest first) until one succeeds.
+  const cleaned = String(text).replace(/```(?:json)?/gi, "").trim();
+
+  // Walk the cleaned string tracking depth and whether we are inside a JSON
+  // string literal, so brackets inside string values are ignored.
+  const spans = [];
+  let depth = 0, startIdx = -1, inStr = false, esc = false;
+  for (let i = 0; i < cleaned.length; i++) {
+    const ch = cleaned[i];
+    if (inStr) {
+      if (esc)       { esc = false; }
+      else if (ch === "\\") { esc = true; }
+      else if (ch === """) { inStr = false; }
+      continue;
+    }
+    if (ch === """) { inStr = true; continue; }
+    if (ch === "[") {
+      if (depth === 0) startIdx = i;
+      depth++;
+    } else if (ch === "]") {
+      if (depth > 0) {
+        depth--;
+        if (depth === 0 && startIdx !== -1) {
+          spans.push([startIdx, i + 1]);
+          startIdx = -1;
+        }
+      }
+    }
+  }
+
+  if (!spans.length) throw new Error("no JSON array in model output");
+
+  // Try each balanced span, largest first (the real payload dominates),
+  // until one parses as an array.
+  spans.sort((a, b) => (b[1] - b[0]) - (a[1] - a[0]));
+  let lastErr;
+  for (const [s, e] of spans) {
+    try {
+      const arr = JSON.parse(cleaned.slice(s, e));
+      if (Array.isArray(arr)) return arr;
+      lastErr = new Error("model output is not an array");
+    } catch (err) {
+      lastErr = err;
+    }
+  }
+  throw lastErr || new Error("no parseable JSON array in model output");
 }
 
 // ---------------------------------------------------------------------------
