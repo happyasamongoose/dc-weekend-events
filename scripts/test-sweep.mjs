@@ -11,7 +11,7 @@ import path from "node:path";
 import {
   main, callModel, validateAndNormalize, dedup, mergeRecurring, sortForFile,
   parseEventArray, slugify, eventId, nextSaturdays, todayInNewYorkISO,
-  urlScore, normalizeNeighborhood, normalizeCategory, normalizeAge, TRACKS
+  urlScore, normalizeNeighborhood, normalizeCategory, normalizeAge, TRACKS, TRACK_CONCURRENCY, REQUEST_TIMEOUT_MS
 } from "./sweep.mjs";
 
 let n = 0; const fails = [];
@@ -380,6 +380,44 @@ function cannedModel(byTrackNum) {
   t("s8 missing key -> exit 1", code === 1);
   t("s8 nothing written", !fs.existsSync(path.join(dir, "events.json")));
 }
+// --- new tunables: concurrency + request timeout are exported numbers ----
+t("TRACK_CONCURRENCY is a positive number", typeof TRACK_CONCURRENCY === "number" && TRACK_CONCURRENCY >= 1);
+t("REQUEST_TIMEOUT_MS is a positive number", typeof REQUEST_TIMEOUT_MS === "number" && REQUEST_TIMEOUT_MS > 0);
+
+// --- scenario 9: tracks run concurrently, results merged in track order ---
+{
+  const dir = tmpRepo(null);
+  // Instrument the canned model to record max concurrent in-flight calls and
+  // to finish out of track order (track 1 slowest), proving parallelism while
+  // the merged output must still come out ordered by track number.
+  const base = cannedModel({
+    1: [mk({ title: "T1", venue: "V1", date: "2026-06-20" })],
+    2: [mk({ title: "T2", venue: "V2", date: "2026-06-20" })],
+    3: [mk({ title: "T3", venue: "V3", date: "2026-06-20" })],
+    4: [mk({ title: "T4", venue: "V4", date: "2026-06-20" })],
+    5: [], 6: [], 7: []
+  });
+  let inFlight = 0, maxInFlight = 0;
+  const delays = { 1: 40, 2: 20, 3: 10, 4: 5 };
+  const model = async (args) => {
+    inFlight++; maxInFlight = Math.max(maxInFlight, inFlight);
+    const num = TRACKS.find((tr) => args.prompt.includes(tr.prompt.split("{WEEKEND_LIST}")[1].slice(0, 60))).num;
+    await new Promise((r) => setTimeout(r, delays[num] || 1));
+    inFlight--;
+    return base(args);
+  };
+  const code = await main({ rootDir: dir, now: NOW, callModel: model, log: quiet, env: {} });
+  const out = readEvents(dir);
+  t("s9 exit 0", code === 0);
+  t("s9 ran tracks concurrently (max in-flight > 1)", maxInFlight > 1);
+  t("s9 concurrency capped at TRACK_CONCURRENCY", maxInFlight <= TRACK_CONCURRENCY);
+  t("s9 all four weekly tracks present", base.seen.length === 4);
+  // searched results must be ordered by track number despite finishing order
+  const titles = out.events.filter((e) => !e.recurring).map((e) => e.title);
+  const idx1 = titles.indexOf("T1"), idx4 = titles.indexOf("T4");
+  t("s9 results merged in track order (T1 before T4)", idx1 !== -1 && idx4 !== -1 && idx1 < idx4);
+}
+
 
 console.log(fails.length ? `FAIL (${fails.length}/${n}):\n - ` + fails.join("\n - ") : `All ${n} sweep tests passed.`);
 process.exit(fails.length ? 1 : 0);
