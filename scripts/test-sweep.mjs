@@ -166,6 +166,12 @@ t("parse empty array", parseEventArray("[]").length === 0);
 let threw = false; try { parseEventArray("no array here"); } catch { threw = true; }
 t("parse throws without array", threw);
 
+t("parse: trailing citation [1] ignored", parseEventArray('[{"x":1}]\n\nSee [1].').length === 1);
+t("parse: leading citation [1][2] ignored", parseEventArray('See [1][2]:\n[{"x":2}]')[0].x === 2);
+t("parse: bracket inside string value", parseEventArray('[{"p":"[free]","n":"a]b"}]')[0].p === "[free]");
+t("parse: escaped backslash in string", parseEventArray('[{"p":"a\\\\b"}]')[0].p === "a\\b");
+t("parse: nested array in object", Array.isArray(parseEventArray('[{"tags":["a","b"]}]')[0].tags));
+
 // ---------------------------------------------------------------------------
 // callModel — pause_turn continuation + retry, via fake fetch
 // ---------------------------------------------------------------------------
