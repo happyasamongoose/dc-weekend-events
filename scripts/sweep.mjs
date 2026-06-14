@@ -27,6 +27,8 @@ export const THEATER_STALE_DAYS = 13;       // (d) tracks 5–7 cadence
 export const MIN_NONRECURRING = 8;          // (g) safety floor
 export const MAX_TRACK_ERRORS = 2;          // (g) abort if MORE than this errored
 export const RETRY_DELAY_MS = 20000;
+export const TRACK_CONCURRENCY = 3;       // tracks run in parallel, capped (rate-limit friendly)
+export const REQUEST_TIMEOUT_MS = 120000; // abort a single API request if it hangs (2 min)
 
 // ---------------------------------------------------------------------------
 // Canonical lists — SCHEMA.md, exact strings
@@ -468,17 +470,38 @@ export function parseEventArray(text) {
 // ---------------------------------------------------------------------------
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
-async function postMessages(fetchImpl, apiKey, body, retryDelayMs, log) {
+async function postMessages(fetchImpl, apiKey, body, retryDelayMs, log, timeoutMs = REQUEST_TIMEOUT_MS) {
   for (let attempt = 0; ; attempt++) {
-    const res = await fetchImpl("https://api.anthropic.com/v1/messages", {
-      method: "POST",
-      headers: {
-        "x-api-key": apiKey, // (Step 4) comes from Actions secrets; never logged
-        "anthropic-version": "2023-06-01",
-        "content-type": "application/json"
-      },
-      body: JSON.stringify(body)
-    });
+    const ctrl = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(), timeoutMs);
+    let res;
+    try {
+      res = await fetchImpl("https://api.anthropic.com/v1/messages", {
+        method: "POST",
+        headers: {
+          "x-api-key": apiKey, // (Step 4) comes from Actions secrets; never logged
+          "anthropic-version": "2023-06-01",
+          "content-type": "application/json"
+        },
+        body: JSON.stringify(body),
+        signal: ctrl.signal
+      });
+    } catch (e) {
+      // An aborted request surfaces as an AbortError; treat a timeout as a
+      // retryable failure on the first attempt, same as a 5xx/429.
+      if (ctrl.signal.aborted && attempt === 0) {
+        log(`  api request timed out after ${Math.round(timeoutMs / 1000)}s; retrying`);
+        clearTimeout(timer);
+        await sleep(retryDelayMs);
+        continue;
+      }
+      clearTimeout(timer);
+      throw ctrl.signal.aborted
+        ? new Error(`Anthropic API request timed out after ${timeoutMs}ms`)
+        : e;
+    } finally {
+      clearTimeout(timer);
+    }
     if (res.ok) return res.json();
     const retryable = [429, 500, 502, 503, 529].includes(res.status);
     const detail = (await res.text().catch(() => "")).slice(0, 300);
@@ -561,13 +584,21 @@ export async function main(opts = {}) {
     return 1;
   }
 
-  // ---- run tracks (sequential; each isolated by try/catch) ----------------
+  // ---- run tracks (bounded concurrency; each isolated by try/catch) -------
+  // Tracks are independent API calls, so we run up to TRACK_CONCURRENCY at a
+  // time instead of strictly one-by-one. Results are merged back in track
+  // order afterwards so dedup tie-breaking (earlier track = fresher) and the
+  // log output stay deterministic regardless of which call finishes first.
   let trackErrors = 0;
   const found = [];
   const dropTally = new Map();
-  for (const track of tracksToRun) {
+
+  // Run one track in isolation; returns its own results without mutating
+  // shared state, so concurrent tracks never race on found/dropTally.
+  async function runTrack(track) {
     const weekendList = (track.weekly ? sats3 : sats6).join(", "); // (e)
     const prompt = track.prompt.split("{WEEKEND_LIST}").join(weekendList);
+    const local = { events: [], drops: new Map(), error: null };
     try {
       log(`[track ${track.num} ${track.name}] weekends: ${weekendList}`);
       const text = await call({ system: SYSTEM_PROMPT, prompt, apiKey, log });
@@ -575,14 +606,35 @@ export async function main(opts = {}) {
       let kept = 0;
       for (const r of raw) {
         const v = validateAndNormalize(r, window);
-        if (v.event) { found.push(v.event); kept++; }
-        else dropTally.set(v.drop, (dropTally.get(v.drop) || 0) + 1);
+        if (v.event) { local.events.push(v.event); kept++; }
+        else local.drops.set(v.drop, (local.drops.get(v.drop) || 0) + 1);
       }
       log(`[track ${track.num}] ${raw.length} returned, ${kept} valid`);
     } catch (e) {
-      trackErrors++;
+      local.error = e;
       log(`[track ${track.num}] ERROR: ${e.message}`);
     }
+    return local;
+  }
+
+  // Bounded pool: at most TRACK_CONCURRENCY runTrack calls in flight at once.
+  const results = new Array(tracksToRun.length);
+  let nextIdx = 0;
+  const worker = async () => {
+    while (nextIdx < tracksToRun.length) {
+      const i = nextIdx++;
+      results[i] = await runTrack(tracksToRun[i]);
+    }
+  };
+  const poolSize = Math.max(1, Math.min(TRACK_CONCURRENCY, tracksToRun.length));
+  await Promise.all(Array.from({ length: poolSize }, () => worker()));
+
+  // Merge in track order so behavior matches the old sequential run.
+  for (const local of results) {
+    if (!local) continue;
+    if (local.error) trackErrors++;
+    for (const ev of local.events) found.push(ev);
+    for (const [reason, n] of local.drops) dropTally.set(reason, (dropTally.get(reason) || 0) + n);
   }
 
   // (c) drop "low" confidence before publish
