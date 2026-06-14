@@ -30,7 +30,7 @@ jobs:
 
       - uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: 22
 
       # sweep.mjs has zero npm dependencies — no install step needed.
       # The key is passed only as an env var; it is never echoed or logged.
