@@ -1,0 +1,53 @@
+# .github/workflows/refresh.yml
+# Weekly events.json refresh — Thursdays 10:00 UTC + manual trigger.
+# Cadence (weekly vs twice-monthly theater) is decided INSIDE sweep.mjs,
+# so this is the ONLY workflow.
+#
+# If sweep.mjs hits its safety fallback (too few events / too many track
+# errors) it exits non-zero: this run shows red, no commit happens, and the
+# last good events.json stays published.
+
+name: Refresh events
+
+on:
+  schedule:
+    - cron: "0 10 * * 4" # Thursdays 10:00 UTC
+  workflow_dispatch: {} # manual runs from the Actions tab while verifying quality
+
+permissions:
+  contents: write # to commit events.json
+
+concurrency:
+  group: refresh-events # a manual run won't overlap the scheduled one
+  cancel-in-progress: false
+
+jobs:
+  refresh:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      # sweep.mjs has zero npm dependencies — no install step needed.
+      # The key is passed only as an env var; it is never echoed or logged.
+      - name: Run sweep
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        run: node scripts/sweep.mjs
+
+      - name: Commit events.json if changed
+        run: |
+          # --porcelain also catches the very first run, when events.json is new/untracked
+          if [ -z "$(git status --porcelain -- events.json)" ]; then
+            echo "events.json unchanged — nothing to commit"
+          else
+            git config user.name "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git add events.json
+            git commit -m "refresh events.json ($(date -u +%Y-%m-%d))"
+            git push
+          fi
