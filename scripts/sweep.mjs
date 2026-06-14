@@ -426,10 +426,10 @@ export function parseEventArray(text) {
     if (inStr) {
       if (esc)       { esc = false; }
       else if (ch === "\\") { esc = true; }
-      else if (ch === """) { inStr = false; }
+      else if (ch === '"') { inStr = false; }
       continue;
     }
-    if (ch === """) { inStr = true; continue; }
+    if (ch === '"') { inStr = true; continue; }
     if (ch === "[") {
       if (depth === 0) startIdx = i;
       depth++;
