@@ -18,6 +18,11 @@ Three things have decayed since the build, and none of them announce themselves:
    `SCHEMA.md` specifically computes ids in code to protect,
 3. ~20–37% of every run's searched events are on weekdays and can never render.
 
+A separate security pass (section S) found no vulnerability reachable today: no secrets
+in the repo or its history, no third-party code on the page, every rendered field
+escaped. Its two medium findings are both about the one input an outsider controls —
+the open web the model searches — and neither is constrained at the moment.
+
 Nothing here requires re-architecting. The fixes are local.
 
 ---
@@ -211,6 +216,92 @@ inconsistent venue strings in finding 4.
 
 ---
 
+---
+
+## S — Security review
+
+Threat model: a public static page with no auth, no forms, and no server, fed by a
+GitHub Action that turns arbitrary web pages into JSON that children then click links
+in. So the surface is small and specific — untrusted model output rendered in a
+browser, plus one API key in CI.
+
+**Clean on the fundamentals.** No secrets in the working tree or anywhere in git
+history (0 `sk-ant` literals across all commits); the API key is exposed only as an env
+var on the sweep step and never logged (API error bodies are truncated to 300 chars and
+carry no credential); zero npm dependencies, so there is no install-time supply chain at
+all; the page loads **no** third-party script, style, or font — its only outbound
+reference is the Google Calendar link the user clicks; every rendered text field goes
+through `esc()`; `url` is checked against `^https?://` before it reaches an `href`, so
+`javascript:` links can't render; outbound links carry `rel="noopener"`; `?data=` is
+compared strictly against `"sample"` rather than used as a fetch target; localStorage
+holds event ids and nothing else. All 85 current URLs are https.
+
+### S1 · Medium — nothing constrains where an event's link points
+
+`validateAndNormalize` (`sweep.mjs:298` onward) accepts any `https?://` URL. The model
+finds events by searching the open web, so a spammy or compromised source page is the
+one input an outsider controls: prompt-injected text on such a page can produce a
+plausible-looking event whose `url` is attacker-chosen, and it publishes straight to the
+family page. Today's data shows no sign of this — 39 distinct hosts, all legitimate
+venue, ticketing, or city domains — but nothing in the pipeline would stop it.
+
+Fix: an allowlist by URL host at validation (the track prompts already enumerate their
+domains), `allowed_domains` on the web_search tool per track, and drop or flag entries
+whose host isn't recognized rather than publishing them.
+
+### S2 · Medium — `source` can't be trusted, so provenance can't be audited
+
+`SCHEMA.md` defines `source` as "domain the entry came from, for trust/debugging", but
+`sweep.mjs` takes the model's string and only falls back to the URL host. **53 of 85**
+entries have a `source` that doesn't match their own link:
+
+```
+source="dc.theater / dc.events"                   url host=dcimprov.com
+source="washington.org / playbill.com"            url host=woollymammoth.net
+source="washingtontimes.com / kennedy-center.org" url host=kennedy-center.org
+```
+
+The field you would reach for while investigating a bad link is model prose. Fix: derive
+it in code from the URL host, exactly as `id` is — delete the `raw.source ||` precedence.
+
+### S3 · Low — HTML attribute injection via `category`
+
+`index.html:284` builds `style="color:var(--cat-<category>, …)"` by string concatenation
+with no escaping, unlike every other field on the card. Verified to break out of the
+attribute:
+
+```
+category: x" onmouseover="alert(1)
+renders:  <span class="chip" style="color:var(--cat-x" onmouseover="alert(1), …)">
+```
+
+Not reachable today — searched entries are allowlisted against the canonical category
+list — but `recurring.json` is merged without validation (finding 8), so a hand-edit is
+the live path, and the guard sits in a different file from the sink. Fix: `esc()` it, or
+map the category to a CSS class instead of interpolating into a style attribute.
+
+### S4 · Low — Actions pinned to floating major tags
+
+`actions/checkout@v4` and `actions/setup-node@v4` resolve to whatever those tags point
+at. A compromised tag executes inside a job that holds `contents: write` and, on the
+sweep step, the Anthropic key. Pin both to full commit SHAs, and move `permissions` from
+the workflow onto the job so the scope is stated where it's used.
+
+### S5 · Low — no Content-Security-Policy
+
+GitHub Pages can't set headers, but a `<meta http-equiv="Content-Security-Policy">`
+would cap the blast radius of any future escaping mistake (S3 among them). The page is
+one inline `<style>` and one inline `<script>`, so a meaningful policy needs hashes —
+`'unsafe-inline'` would give up most of the benefit. Worth doing only alongside moving
+the script and style into files: `default-src 'none'; script-src 'self'; style-src
+'self'; connect-src 'self'`.
+
+### S6 · Info — the whole repo is world-readable
+
+Pages serves from the repo root of a public repo, so everything committed is public,
+`recurring.json` included. Keep it that way deliberately: no home address as a "venue",
+no children's names, no annotations about when the house is empty.
+
 ## Suggested order of work
 
 | # | Change | Why now |
@@ -218,10 +309,12 @@ inconsistent venue strings in finding 4.
 | 1 | Fix scenario 9 + add `test.yml` | Restores the safety net before anything else moves |
 | 2 | Stable ids + favorites fallback | Silently broken user-facing feature |
 | 3 | Stale banner + failure issue | Makes the next silent failure visible |
-| 4 | Weekday-singles decision | ~25% of spend currently buys invisible rows |
-| 5 | `claude-sonnet-5` + `web_search_20260209` | Cheaper and better in one edit |
-| 6 | Structured outputs, drop `parseEventArray` | Removes the most fragile code in the repo |
-| 7 | Dedup pass, carried-entry re-validation, usage logging | Cleanup |
-| 8 | Page: run date labels, sample fixture, logic tests | Polish |
+| 4 | URL host allowlist + derive `source` in code (S1, S2) | The only surface an outsider controls |
+| 5 | Weekday-singles decision | ~25% of spend currently buys invisible rows |
+| 6 | `claude-sonnet-5` + `web_search_20260209` | Cheaper and better in one edit |
+| 7 | Structured outputs, drop `parseEventArray` | Removes the most fragile code in the repo |
+| 8 | Dedup pass, carried-entry re-validation, usage logging | Cleanup |
+| 9 | Page: run date labels, sample fixture, logic tests | Polish |
 
-Findings 1–5 are roughly an afternoon together.
+Findings 1–5 are roughly an afternoon together. S3–S6 are one-line changes each and
+can ride along with anything above them.
