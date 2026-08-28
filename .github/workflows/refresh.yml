@@ -1,11 +1,12 @@
 # .github/workflows/refresh.yml
 # Weekly events.json refresh — Thursdays 10:00 UTC + manual trigger.
 # Cadence (weekly vs twice-monthly theater) is decided INSIDE sweep.mjs,
-# so this is the ONLY workflow.
+# so this is the ONLY refresh workflow.
 #
 # If sweep.mjs hits its safety fallback (too few events / too many track
-# errors) it exits non-zero: this run shows red, no commit happens, and the
-# last good events.json stays published.
+# errors / a bad recurring.json) it exits non-zero: this run shows red, no
+# commit happens, and the last good events.json stays published. A failure
+# also files an issue — a silent red run went unnoticed for a week once.
 
 name: Refresh events
 
@@ -13,9 +14,6 @@ on:
   schedule:
     - cron: "0 10 * * 4" # Thursdays 10:00 UTC
   workflow_dispatch: {} # manual runs from the Actions tab while verifying quality
-
-permissions:
-  contents: write # to commit events.json
 
 concurrency:
   group: refresh-events # a manual run won't overlap the scheduled one
@@ -25,12 +23,26 @@ jobs:
   refresh:
     runs-on: ubuntu-latest
     timeout-minutes: 20
+    # Scoped on the job rather than the workflow, so the grant sits next to the
+    # steps that use it. Actions are pinned to commit SHAs: a moving major tag
+    # would run whatever it points at inside a job holding a writable token and
+    # the API key.
+    permissions:
+      contents: write # to commit events.json
+      issues: write # to report a failed run
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: 22
+
+      # Both suites are dependency-free and take under a second. A broken parser
+      # should stop the run here, before it spends anything on the API.
+      - name: Test
+        run: |
+          node scripts/test-sweep.mjs
+          node scripts/test-page.mjs
 
       # sweep.mjs has zero npm dependencies — no install step needed.
       # The key is passed only as an env var; it is never echoed or logged.
@@ -50,4 +62,23 @@ jobs:
             git add events.json
             git commit -m "refresh events.json ($(date -u +%Y-%m-%d))"
             git push
+          fi
+
+      # A red run is only useful if somebody hears about it. One issue is reused
+      # for repeat failures so a broken week doesn't become a pile of issues.
+      - name: Report failure
+        if: failure()
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          title="Weekly events refresh failed"
+          body="The scheduled refresh failed on $(date -u +%Y-%m-%d). The last good events.json is still published, so the page is showing older listings — it will flag itself as stale after 10 days.
+
+          Run log: $RUN_URL"
+          existing=$(gh issue list --state open --search "$title in:title" --json number --jq '.[0].number')
+          if [ -n "$existing" ]; then
+            gh issue comment "$existing" --body "$body"
+          else
+            gh issue create --title "$title" --body "$body"
           fi

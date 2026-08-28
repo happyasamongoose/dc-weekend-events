@@ -1,0 +1,27 @@
+# .github/workflows/test.yml
+# The suites had been red for weeks with nothing to notice it. They are
+# dependency-free and finish in about a second, so they run on every push.
+
+name: Tests
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 22
+      - name: sweep logic
+        run: node scripts/test-sweep.mjs
+      - name: page logic
+        run: node scripts/test-page.mjs

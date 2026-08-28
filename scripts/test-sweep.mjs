@@ -577,6 +577,22 @@ await scenario("s9", async () => {
   t("usage accumulated across a track", usage.input === 10 && usage.output === 2 && usage.searches === 1);
 }
 
+// ---------------------------------------------------------------------------
+// PROMPTS.md is documented as the source of the embedded prompt strings, so it
+// has to actually match them — it drifted once already.
+// ---------------------------------------------------------------------------
+{
+  const md = fs.readFileSync(new URL("../PROMPTS.md", import.meta.url), "utf8");
+  for (const tr of TRACKS) {
+    const firstLine = tr.prompt.split("\n")[0].trim();
+    t(`track ${tr.num} prompt matches PROMPTS.md`, md.includes(firstLine));
+  }
+  t("PROMPTS.md states the Fri-Sun rule", /FRIDAY, SATURDAY and SUNDAY/.test(md));
+  t("PROMPTS.md names the current model", md.includes("claude-sonnet-5"));
+  t("PROMPTS.md names the current search tool", md.includes("web_search_20260209"));
+  t("system prompt states the Fri-Sun rule", /FRIDAY, SATURDAY and SUNDAY/.test(md));
+}
+
 // --- scenario 10: carried entries that fell out of the window are dropped ---
 await scenario("s10", async () => {
   const stale = validateAndNormalize(mk({ ...musicSingle, date: "2026-06-14" }), WINDOW).event;
