@@ -12,8 +12,11 @@ scheduled GitHub Action refreshes weekly. No server, no per-view compute, free h
   recurring.json      hardcoded passive layer (markets/parks/trails); hand-edited
 /.github/workflows/
   refresh.yml         runs every Thursday 10:00 UTC + manual workflow_dispatch trigger
+  test.yml            both suites on every push and PR
 /scripts/
   sweep.mjs           Node script: calls Anthropic API, runs tracks, merges, writes events.json
+  test-sweep.mjs      offline suite for sweep.mjs (185 checks, no API calls)
+  test-page.mjs       offline suite for index.html's logic block (68 checks)
 SCHEMA.md             the data contract (read this first)
 PROMPTS.md            the per-track prompts (sweep.mjs embeds these strings directly)
 ```
@@ -71,8 +74,10 @@ function matchesTab(ev, tab) {
 
 ### 3. Weekend picker
 Build 6 buttons from `events.json.weekStartsCovered`. Label the nearest "This Weekend".
-For each weekend compute its Saturday + Sunday and run the date logic from SCHEMA.md to
-decide which events show. Pass that weekend's Sat/Sun into the calendar URL builder.
+For each weekend compute its Friday, Saturday and Sunday and run the date logic from
+SCHEMA.md to decide which events show. Pass that weekend's Sat/Sun into the calendar URL
+builder. Weekends 4–6 carry far fewer one-off events by design (the weekly tracks taper
+to three weekends), so the page says so rather than looking empty.
 
 ### 4. Neighborhood toggles
 Default 4: Capitol Hill, Southwest/The Wharf, Navy Yard/Ballpark, Downtown/National Mall.
@@ -80,10 +85,11 @@ Plus "All DC" (includes U Street, H Street NE, Other DC). Plus "Worth the Trip" 
 default; only then show events where `worthTheTrip === true`).
 
 ### 5. Favorites (browser-local, per device)
-Store an array of favorited `id`s in `localStorage`. A star toggles membership; a
-"Saved" view filters to those ids. Per-device is fine for v1 — each kid stars on their
-own phone. (NOTE: artifacts in Claude can't use localStorage, but a real GitHub Pages
-site CAN — this constraint only applies if previewing inside Claude.)
+Store `{id, fp}` records in `localStorage`, where `fp` is a fingerprint of the
+normalized title plus neighborhood. A star toggles membership; a "Saved" view filters to
+them. Matching on the fingerprint as well as the id means a saved event keeps its star
+even if the sweep recomputes its id, and the record heals itself to the new id when that
+happens. Per-device is fine for v1 — each kid stars on their own phone.
 
 ### NOT on this page: the AI "plan my day" chat
 Deliberately omitted — it's the only feature needing live API calls. It belongs in the
@@ -91,17 +97,20 @@ Deliberately omitted — it's the only feature needing live API calls. It belong
 events.json, so nothing is wasted.
 
 ## Date logic (copy into the page)
+A weekend is **Friday through Sunday** — see SCHEMA.md.
 ```js
 function showsThisWeekend(ev, satDate, sunDate) {
+  var friDate = fridayOf(satDate);
   if (ev.eventType === "recurring") return true;
-  if (ev.eventType === "single") return ev.date === satDate || ev.date === sunDate;
-  if (ev.eventType === "run") return ev.startDate <= sunDate && ev.endDate >= satDate;
+  if (ev.eventType === "single") return ev.date === friDate || ev.date === satDate || ev.date === sunDate;
+  if (ev.eventType === "run") return ev.startDate <= sunDate && ev.endDate >= friDate;
   return false;
 }
 ```
 
 ## Card display notes
-- Show: title, when (date / "Now through {endDate}" for runs / "Every weekend" for
+- Show: title, when (date / "Now through {endDate}" for a run already in progress /
+  a date range like "Sep 5–6" for one that hasn't started / "Every weekend" for
   recurring), venue + neighborhood, category chip, price.
 - Badges: green "Free" if isFree; "Low-cost" if isLowCost && !isFree; "Teens OK" if
   goodForTeens; red age chip if ageRestriction is 18+/21+.
@@ -118,19 +127,29 @@ single column, large tap targets, sticky weekend picker + tabs at top.
 - Compute the next 6 Saturdays → {WEEKEND_LIST} at runtime.
 - Decide cadence: always run tracks 1–4; run tracks 5–7 only if lastTheaterRefresh is
   older than 13 days, otherwise carry forward existing theater/music/comedy entries.
-- For each track: POST to Anthropic Messages API (model: claude-sonnet-4-6 — this is
-  extraction work, don't use a pricier model) with the web_search tool; run the tool-use
-  loop, capped at 6 searches per track, with a sane max_tokens; strip stray fences;
-  JSON.parse; wrap each track in try/catch so one failure doesn't kill the run.
+- For each track: POST to Anthropic Messages API (model: claude-sonnet-5 — cheaper and
+  newer than sonnet-4-6, and this is extraction work) with the `web_search_20260209`
+  tool; run the tool-use loop, capped at 6 searches per track; strip stray fences;
+  JSON.parse, salvaging complete objects if the response was truncated; wrap each track
+  in try/catch so one failure doesn't kill the run. Tracks 5–7 pass `allowed_domains` —
+  they read named venue calendars, so capping their search costs no coverage. Tracks 1–4
+  stay open because they find events *through* roundup posts.
 - THE MODEL ONLY FINDS EVENTS — all determinism lives in code:
-  - Compute each id in code: slugify(venue + title + year). Ignore model-provided ids.
-    Stable ids are what keep favorites working across refreshes.
+  - Compute each id in code: slugify(url host + normalized title + year). Ignore
+    model-provided ids. Stable ids are what keep favorites working across refreshes —
+    and the venue string is NOT stable, which is why the host anchors it.
+  - Derive `source` from the url host too; the model's own `source` is prose.
   - Validate: category/neighborhood must exactly match SCHEMA.md canonical lists;
-    dates must parse and fall in the covered window; drop entries that fail.
+    the url host must be on ALLOWED_URL_HOSTS; single dates must parse, be a
+    Fri/Sat/Sun, and fall in the covered window; drop entries that fail.
   - Coerce: if ageRestriction is 18+/21+, force goodForTeens=false.
 - Concatenate, drop confidence "low", dedup per SCHEMA.md, merge recurring.json last.
+- Validate recurring.json against the same canonical lists BEFORE calling the API; it is
+  hand-edited, so a bad edit should stop the run rather than publish quietly.
 - Safety: if non-recurring count < 8, or more than 2 tracks errored, keep the last good
-  events.json, log a warning, exit non-zero (never publish an empty page).
+  events.json, log a warning, exit non-zero (never publish an empty page). A failed run
+  files an issue; the page flags itself stale after 10 days.
+- Log what the run cost: input/output tokens and web searches, at list rates.
 - Write events.json with generatedAt, weekStartsCovered, lastTheaterRefresh.
 
 ## Setup checklist (do later, at your machine)

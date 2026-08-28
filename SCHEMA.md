@@ -59,7 +59,7 @@ the key design decision: one shape, three behaviors.
 
 | Field | Type | Notes |
 |---|---|---|
-| `id` | string | Stable slug, COMPUTED IN CODE by sweep.mjs (never by the model): slugify(venue + title + year), lowercased, hyphenated. Used for dedup + favorites. MUST be stable across runs so a favorited event keeps its star. |
+| `id` | string | Stable slug, COMPUTED IN CODE by sweep.mjs (never by the model): `slugify(url host + normalized title + year)`. The normalized title drops a trailing subtitle and filler words. Used for dedup + favorites. MUST be stable across runs so a favorited event keeps its star — it is keyed on the url host, not `venue`, because the model rewrites venue free-text every run. |
 | `title` | string | Event name. |
 | `eventType` | enum | `"single"`, `"run"`, or `"recurring"`. Drives date logic (below). |
 | `date` | string\|null | For `single` events only: the ISO date `YYYY-MM-DD`. Null otherwise. |
@@ -76,18 +76,24 @@ the key design decision: one shape, three behaviors.
 | `goodForTeens` | bool | Suitable/appealing for a teen or preteen. See guidance in PROMPTS. |
 | `ageRestriction` | string\|null | e.g. `"18+"`, `"21+"`, `"All ages"`. Critical for music/comedy. If `18+` or `21+`, `goodForTeens` MUST be false. |
 | `description` | string | 1–2 sentences, plain. No marketing fluff. |
-| `url` | string | Link out to tickets/info. Prefer the official venue page. |
-| `source` | string | Domain the entry came from, for trust/debugging. |
+| `url` | string | Link out to tickets/info. Prefer the official venue page. The host MUST be on `ALLOWED_URL_HOSTS` in sweep.mjs or the entry is dropped — this is the one field an outside web page can influence. |
+| `source` | string | Domain the entry came from, for trust/debugging. DERIVED IN CODE from `url`, never taken from the model — otherwise it is prose, not provenance. |
 | `recurring` | bool | `true` for the hardcoded passive layer (markets, parks, trails). |
 | `confidence` | enum | `"high"`, `"medium"`, `"low"`. Entries below `medium` are dropped before publish. |
 
 ## Date logic — how the page decides "is this on for the selected weekend?"
 
-Given a selected weekend (a Saturday `satDate` and Sunday `sunDate`):
+**A weekend is Friday, Saturday and Sunday.** Friday evening is when a family
+starts its weekend, and the sweep was already finding Friday events the page could
+never show. `weekStartsCovered` still lists Saturdays; the Friday is derived.
 
-- **`eventType: "single"`** → show if `date === satDate || date === sunDate`.
+Given a selected weekend (`satDate`, with `friDate` the day before and `sunDate`
+the day after):
+
+- **`eventType: "single"`** → show if `date === friDate || date === satDate || date === sunDate`.
+  A Monday-to-Thursday date is dropped by sweep.mjs before it ever reaches the file.
 - **`eventType: "run"`** → show if the run overlaps the weekend:
-  `startDate <= sunDate && endDate >= satDate`. (A play running "now–July 26"
+  `startDate <= sunDate && endDate >= friDate`. (A play running "now–July 26"
   appears on every weekend inside that window.)
 - **`eventType: "recurring"`** → always show (these are weekly standing options like
   Eastern Market). Optionally annotate with the weekend date for calendar links.
@@ -127,7 +133,13 @@ Given a selected weekend (a Saturday `satDate` and Sunday `sunDate`):
 
 ## Dedup rule
 
-Two entries are the same event if they share the same `id`, OR same normalized
-`title` + same `venue`. On collision: keep the higher `confidence`; if tied, keep the
-one with the more specific `url` (official venue domain over aggregator). The recurring
-layer is merged LAST and never overwrites a fresher searched entry for the same thing.
+Two entries are the same event if they share the same `id`, OR the same normalized
+`title` + `venue`. A second, looser pass then catches the same event written two ways
+("DC JazzFest at The Wharf" / "… – 22nd Annual Grand Finale Weekend"): same day (or
+overlapping runs), same neighborhood, compatible venues (same host, or one venue name
+contained in the other), and either an identical subtitle-stripped title or heavy word
+overlap resting on at least two meaningful words.
+
+On collision, either pass: keep the higher `confidence`; if tied, keep the one with the
+more specific `url` (official venue domain over aggregator). The recurring layer is
+merged LAST and never overwrites a fresher searched entry for the same thing.

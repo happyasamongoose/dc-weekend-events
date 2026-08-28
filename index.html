@@ -4,7 +4,15 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="color-scheme" content="dark">
+<!-- (S5) GitHub Pages can't send headers, so the policy rides in the document.
+     The page is one inline <style> and one inline <script> with no build step to
+     hash them, so 'unsafe-inline' is unavoidable here — but everything else is
+     shut: no third-party script can be injected, no XHR can leave the origin,
+     and nothing can be fetched cross-origin. (frame-ancestors is header-only —
+     GitHub Pages can't send it, so framing is not covered here.) -->
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; connect-src 'self'; img-src 'self' data:; form-action 'none'; base-uri 'none'">
 <title>DC Weekends — Family Events Planner</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Crect width='16' height='16' rx='3' fill='%230d0e11'/%3E%3Ctext x='8' y='12' font-size='11' text-anchor='middle' fill='%23c8a96e' font-family='Georgia,serif'%3ED%3C/text%3E%3C/svg%3E">
 <style>
 :root{
   --bg:#0d0e11; --panel:#15171c; --panel2:#1c1f26; --line:#262a31;
@@ -53,6 +61,8 @@ body{margin:0;background:var(--bg);color:var(--ink);font-family:var(--sans);-web
 .hood.wtt.on{color:var(--gold);border-color:var(--gold)}
 
 /* ---------- cards ---------- */
+.farnote{font-family:var(--mono);font-size:10.5px;line-height:1.6;letter-spacing:.06em;text-transform:uppercase;color:var(--ink-faint);margin:14px 16px -2px;padding:0}
+.farnote[hidden]{display:none}
 main{padding:14px 16px 8px;display:flex;flex-direction:column;gap:12px}
 .card{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:14px 14px 11px}
 .card-top{display:flex;flex-wrap:wrap;gap:6px;align-items:center}
@@ -62,6 +72,12 @@ main{padding:14px 16px 8px;display:flex;flex-direction:column;gap:12px}
 .b-low{color:var(--gold);background:var(--gold-dim)}
 .b-teens{color:#8fbce4;background:rgba(111,167,217,.13)}
 .b-age{color:#ff9090;background:rgba(226,91,91,.16);border:1px solid rgba(226,91,91,.45)}
+.chip.cat-outdoor{color:var(--cat-outdoor)} .chip.cat-music{color:var(--cat-music)}
+.chip.cat-theater{color:var(--cat-theater)} .chip.cat-comedy{color:var(--cat-comedy)}
+.chip.cat-museums-culture{color:var(--cat-museums-culture)} .chip.cat-arts{color:var(--cat-arts)}
+.chip.cat-sports-active{color:var(--cat-sports-active)} .chip.cat-biking{color:var(--cat-biking)}
+.chip.cat-food-markets{color:var(--cat-food-markets)} .chip.cat-family-teens{color:var(--cat-family-teens)}
+.chip{color:var(--ink-dim)}
 .card h2{font-family:var(--serif);font-size:19.5px;line-height:1.2;margin:9px 0 3px;font-weight:700}
 .when{font-family:var(--mono);font-size:11.5px;letter-spacing:.04em;color:var(--gold);margin:0 0 3px}
 .where{font-size:12.5px;color:var(--ink-dim);margin:0 0 7px}
@@ -97,6 +113,7 @@ footer{font-family:var(--mono);font-size:10px;letter-spacing:.12em;text-transfor
     <nav class="row" id="hoods" aria-label="Filter by neighborhood"></nav>
   </div>
 
+  <p id="farnote" class="farnote" hidden>Weekends this far out are refreshed closer to the date — expect more to appear.</p>
   <main id="cards" aria-live="polite"></main>
   <footer id="foot"></footer>
 </div>
@@ -137,11 +154,14 @@ function matchesTab(ev, tab) {
   return ev.category === tab;
 }
 
-// README.md / SCHEMA.md — weekend date logic (verbatim)
+// SCHEMA.md — weekend date logic. A weekend is Friday through Sunday: Friday
+// evening is when a family actually starts planning, and the sweep was already
+// finding Friday events that the page could never show.
 function showsThisWeekend(ev, satDate, sunDate) {
+  var friDate = fridayOf(satDate);
   if (ev.eventType === "recurring") return true;
-  if (ev.eventType === "single") return ev.date === satDate || ev.date === sunDate;
-  if (ev.eventType === "run") return ev.startDate <= sunDate && ev.endDate >= satDate;
+  if (ev.eventType === "single") return ev.date === friDate || ev.date === satDate || ev.date === sunDate;
+  if (ev.eventType === "run") return ev.startDate <= sunDate && ev.endDate >= friDate;
   return false;
 }
 
@@ -152,9 +172,21 @@ function passesHoods(ev, activeHoods, wttOn) {
   return activeHoods.indexOf(ev.neighborhood) !== -1;
 }
 
+function fridayOf(satISO) {
+  var d = new Date(satISO + "T12:00:00Z");
+  d.setUTCDate(d.getUTCDate() - 1);
+  return d.toISOString().slice(0, 10);
+}
+
 function sundayOf(satISO) {
   var d = new Date(satISO + "T12:00:00Z");
   d.setUTCDate(d.getUTCDate() + 1);
+  return d.toISOString().slice(0, 10);
+}
+
+function addDaysISO(iso, days) {
+  var d = new Date(iso + "T12:00:00Z");
+  d.setUTCDate(d.getUTCDate() + days);
   return d.toISOString().slice(0, 10);
 }
 
@@ -167,8 +199,8 @@ function addOneDay(yyyymmdd) {            // YYYYMMDD -> YYYYMMDD (GCal end is e
 
 // README.md — Google Calendar URL builder (verbatim)
 function gcalUrl(ev, weekendSat, weekendSun) {
-  // Pick the date: single -> ev.date; recurring -> the selected Saturday;
-  // run -> the selected Saturday (the weekend they're planning).
+  // Pick the date: single -> ev.date; recurring/run -> the selected Saturday
+  // (the middle of the weekend they're planning, and the day both are surely on).
   var day = ev.eventType === "single" ? ev.date : weekendSat;
   // All-day event spanning that day (no reliable end time in data).
   var start = day.split("-").join("");                   // YYYYMMDD
@@ -201,6 +233,40 @@ function nextSaturdays(fromISO, n) {
   return out;
 }
 
+// Mirror of sweep.mjs titleKey: the part of a title that survives a refresh.
+// Favourites are matched on this as well as on id, so a saved event keeps its
+// star even when the sweep recomputes ids.
+var TITLE_NOISE = /\b(the|a|an|at|in|on|of|for|and|presents|presented by|featuring|feat|with|dc|washington)\b/g;
+function titleFingerprint(title) {
+  var t = String(title || "").toLowerCase();
+  var cut = t.search(/\s+[–—-]\s+|:\s+/);
+  if (cut > 0) {
+    var head = t.slice(0, cut).trim();
+    if (head.split(/\s+/).filter(Boolean).length >= 2) t = head;
+  }
+  return t.replace(TITLE_NOISE, " ").replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "");
+}
+function favFingerprint(ev) { return titleFingerprint(ev.title) + "::" + ev.neighborhood; }
+
+// A sample fixture goes stale the moment it is committed. Shift it forward by
+// whole weeks (so weekdays still line up) onto the current window.
+function rebaseSample(data, todayISO) {
+  if (!data.weekStartsCovered || !data.weekStartsCovered.length) return data;
+  var target = nextSaturdays(todayISO, 1)[0];
+  var days = Math.round((Date.parse(target + "T12:00:00Z") - Date.parse(data.weekStartsCovered[0] + "T12:00:00Z")) / 86400000);
+  days = Math.round(days / 7) * 7;
+  if (!days) return data;
+  var shift = function (iso) { return iso ? addDaysISO(iso, days) : iso; };
+  return {
+    generatedAt: data.generatedAt,
+    lastTheaterRefresh: data.lastTheaterRefresh,
+    weekStartsCovered: data.weekStartsCovered.map(shift),
+    events: data.events.map(function (e) {
+      return Object.assign({}, e, { date: shift(e.date), startDate: shift(e.startDate), endDate: shift(e.endDate) });
+    })
+  };
+}
+
 // Display order within a weekend: dated singles first, then runs, then always-on.
 function orderForDisplay(list) {
   var singles = list.filter(function (e) { return e.eventType === "single"; })
@@ -210,47 +276,6 @@ function orderForDisplay(list) {
   var rec = list.filter(function (e) { return e.eventType === "recurring"; });
   return { singles: singles, runs: runs, recurring: rec };
 }
-/*__LOGIC_END__*/
-
-// ---------------------------------------------------------------------------
-// State + rendering
-// ---------------------------------------------------------------------------
-var FAV_KEY = "dcweekends.favs.v1";
-var state = {
-  data: null,
-  weekend: 0,           // index into weekStartsCovered
-  tab: "all",           // category key, or "saved"
-  hoods: {},            // core hood -> bool
-  allDC: false,
-  wtt: false,
-  favs: []
-};
-CORE_HOODS.forEach(function (h) { state.hoods[h] = true; });
-
-function loadFavs() {
-  try { var v = JSON.parse(localStorage.getItem(FAV_KEY) || "[]"); return Array.isArray(v) ? v : []; }
-  catch (e) { return []; }
-}
-function saveFavs() {
-  try { localStorage.setItem(FAV_KEY, JSON.stringify(state.favs)); } catch (e) { /* private mode etc. */ }
-}
-function isFaved(id) { return state.favs.indexOf(id) !== -1; }
-function toggleFav(id) {
-  var i = state.favs.indexOf(id);
-  if (i === -1) state.favs.push(id); else state.favs.splice(i, 1);
-  saveFavs();
-}
-
-function activeHoodList() {
-  var out = CORE_HOODS.filter(function (h) { return state.hoods[h]; });
-  if (state.allDC) out = out.concat(ALL_DC_HOODS);
-  return out;
-}
-
-function todayNY() {
-  return new Date().toLocaleDateString("en-CA", { timeZone: "America/New_York" });
-}
-
 function esc(s) {
   return String(s == null ? "" : s).replace(/[&<>"']/g, function (c) {
     return { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c];
@@ -264,11 +289,92 @@ function fmtDay(iso, withWeekday) {
   return d.toLocaleDateString("en-US", o);
 }
 
-function whenText(ev) {
+// "Now through Sep 6" was printed for every run, including the 14 of 25 that
+// hadn't started yet — a two-day September festival read as if it were on today.
+function whenText(ev, todayISO) {
   if (ev.eventType === "recurring") return "Every weekend";
-  if (ev.eventType === "run") return "Now through " + fmtDay(ev.endDate);
+  if (ev.eventType === "run") {
+    if (ev.startDate > todayISO) return dayRange(ev.startDate, ev.endDate);
+    return "Now through " + fmtDay(ev.endDate);
+  }
   return fmtDay(ev.date, true);
 }
+
+// "Sep 5–6" within a month, "Sep 28–Oct 4" across one.
+function dayRange(a, b) {
+  if (a === b) return fmtDay(a);
+  var end = a.slice(0, 7) === b.slice(0, 7) ? fmtDay(b).replace(/^[A-Za-z]+ /, "") : fmtDay(b);
+  return fmtDay(a) + "–" + end;
+}
+/*__LOGIC_END__*/
+
+// ---------------------------------------------------------------------------
+// State + rendering
+// ---------------------------------------------------------------------------
+var FAV_KEY = "dcweekends.favs.v2";   // [{id, fp}] — fp survives an id change
+var FAV_KEY_V1 = "dcweekends.favs.v1"; // [id, …] from before ids were stable
+var STALE_AFTER_DAYS = 10;             // refresh runs weekly; 10 days means it failed
+var state = {
+  data: null,
+  weekend: 0,           // index into weekStartsCovered
+  tab: "all",           // category key, or "saved"
+  hoods: {},            // core hood -> bool
+  allDC: false,
+  wtt: false,
+  favs: []
+};
+CORE_HOODS.forEach(function (h) { state.hoods[h] = true; });
+
+function loadFavs() {
+  try {
+    var v = JSON.parse(localStorage.getItem(FAV_KEY) || "null");
+    if (Array.isArray(v)) return v.filter(function (f) { return f && f.id; });
+    // Migrate the bare id list saved before ids were stable. Those ids are
+    // probably already dead, but a star costs nothing to carry forward.
+    var old = JSON.parse(localStorage.getItem(FAV_KEY_V1) || "[]");
+    if (Array.isArray(old)) {
+      return old.filter(function (id) { return typeof id === "string"; })
+                .map(function (id) { return { id: id, fp: null }; });
+    }
+    return [];
+  } catch (e) { return []; }
+}
+function saveFavs() {
+  try { localStorage.setItem(FAV_KEY, JSON.stringify(state.favs)); } catch (e) { /* private mode etc. */ }
+}
+function favIndex(ev) {
+  var fp = favFingerprint(ev);
+  for (var i = 0; i < state.favs.length; i++) {
+    if (state.favs[i].id === ev.id) return i;
+    if (state.favs[i].fp && state.favs[i].fp === fp) {
+      state.favs[i].id = ev.id;  // same event, new id — heal the record
+      saveFavs();
+      return i;
+    }
+  }
+  return -1;
+}
+function isFaved(ev) { return favIndex(ev) !== -1; }
+function toggleFav(ev) {
+  var i = favIndex(ev);
+  if (i === -1) state.favs.push({ id: ev.id, fp: favFingerprint(ev) });
+  else state.favs.splice(i, 1);
+  saveFavs();
+}
+
+function activeHoodList() {
+  var out = CORE_HOODS.filter(function (h) { return state.hoods[h]; });
+  if (state.allDC) out = out.concat(ALL_DC_HOODS);
+  return out;
+}
+
+function todayNY() {
+  return new Date().toLocaleDateString("en-CA", { timeZone: "America/New_York" });
+}
+
+
+
+
 
 function badgesHtml(ev) {
   var b = "";
@@ -281,16 +387,18 @@ function badgesHtml(ev) {
 }
 
 function cardHtml(ev) {
-  var catColor = "var(--cat-" + ev.category + ", var(--ink-dim))";
+  // The category picks a CSS class, and only from the known list — it is never
+  // interpolated into a style attribute, where a stray quote would escape it.
+  var catClass = CHIP_LABEL[ev.category] ? " cat-" + ev.category : "";
   var safeUrl = /^https?:\/\//i.test(ev.url || "") ? ev.url : "#";
-  var faved = isFaved(ev.id);
+  var faved = isFaved(ev);
   return '<article class="card" data-id="' + esc(ev.id) + '">' +
     '<div class="card-top">' +
-      '<span class="chip" style="color:' + catColor + '">' + esc(CHIP_LABEL[ev.category] || ev.category) + '</span>' +
+      '<span class="chip' + catClass + '">' + esc(CHIP_LABEL[ev.category] || ev.category) + '</span>' +
       badgesHtml(ev) +
     '</div>' +
     '<h2>' + esc(ev.title) + '</h2>' +
-    '<p class="when">' + esc(whenText(ev)) + (ev.time ? " · " + esc(ev.time) : "") + '</p>' +
+    '<p class="when">' + esc(whenText(ev, todayNY())) + (ev.time ? " · " + esc(ev.time) : "") + '</p>' +
     '<p class="where">' + esc(ev.venue) + ' — ' + esc(ev.neighborhood) + '</p>' +
     '<p class="desc">' + esc(ev.description) + '</p>' +
     '<div class="card-foot">' +
@@ -309,7 +417,7 @@ function visibleEvents() {
   var sat = ws[state.weekend], sun = sundayOf(sat);
   var evs = state.data.events;
   if (state.tab === "saved") {
-    return evs.filter(function (e) { return isFaved(e.id); });
+    return evs.filter(function (e) { return isFaved(e); });
   }
   var hoods = activeHoodList();
   return evs.filter(function (e) {
@@ -322,7 +430,7 @@ function renderControls() {
   var nearest = nearestWeekendIndex(ws, todayNY());
   document.getElementById("weekends").innerHTML = ws.map(function (sat, i) {
     var label = i === nearest ? "This Weekend"
-      : fmtDay(sat) + "–" + fmtDay(sundayOf(sat)).replace(/^[A-Za-z]+ /, "");
+      : fmtDay(fridayOf(sat)) + "–" + fmtDay(sundayOf(sat)).replace(/^[A-Za-z]+ /, "");
     return '<button class="wk' + (i === state.weekend ? " on" : "") + '" data-wk="' + i + '">' + label + '</button>';
   }).join("");
 
@@ -354,7 +462,21 @@ function renderCards() {
   document.getElementById("cards").innerHTML = html;
 }
 
-function render() { renderControls(); renderCards(); }
+// The weekly Action has failed silently before (no commit landed on 2026-07-09
+// and the page looked exactly the same). If the data is older than a fortnight's
+// worth of refreshes, say so rather than presenting stale listings as current.
+function staleBannerText(generatedAt, todayISO) {
+  if (!generatedAt) return null;
+  var days = Math.floor((Date.parse(todayISO + "T12:00:00Z") - Date.parse(generatedAt)) / 86400000);
+  if (days < STALE_AFTER_DAYS) return null;
+  return "Listings last updated " + fmtDay(generatedAt.slice(0, 10)) + " — the weekly refresh may have failed";
+}
+
+function render() {
+  renderControls();
+  renderCards();
+  document.getElementById("farnote").hidden = state.weekend < 3;
+}
 
 // ---------------------------------------------------------------------------
 // Events
@@ -377,7 +499,7 @@ document.getElementById("cards").addEventListener("click", function (e) {
   if (!card) return;
   var ev = state.data.events.find(function (x) { return x.id === card.dataset.id; });
   if (!ev) return;
-  if (b.dataset.act === "fav") { toggleFav(ev.id); render(); }
+  if (b.dataset.act === "fav") { toggleFav(ev); render(); }
   if (b.dataset.act === "cal") {
     var sat = state.data.weekStartsCovered[state.weekend];
     window.open(gcalUrl(ev, sat, sundayOf(sat)), "_blank", "noopener");
@@ -404,7 +526,12 @@ function fetchJson(url) {
   var wantSample = new URLSearchParams(location.search).get("data") === "sample";
 
   var load = wantSample
-    ? fetchJson("events-sample.json").then(function (d) { setBanner("Sample data — test fixture, not live listings"); return d; })
+    ? fetchJson("events-sample.json").then(function (d) {
+        setBanner("Sample data — test fixture, not live listings");
+        // The fixture is committed with fixed dates; shift it onto this week so
+        // ?data=sample keeps working as a QA path instead of showing past weekends.
+        return rebaseSample(d, todayNY());
+      })
     : fetchJson("events.json").catch(function () {
         // Before the first Action run: fall back to the always-on recurring layer.
         return fetchJson("recurring.json").then(function (rec) {
@@ -421,6 +548,10 @@ function fetchJson(url) {
   load.then(function (data) {
     state.data = data;
     state.weekend = nearestWeekendIndex(data.weekStartsCovered, todayNY());
+    if (!wantSample) {
+      var stale = staleBannerText(data.generatedAt, todayNY());
+      if (stale) setBanner(stale);
+    }
     var foot = [];
     if (data.generatedAt) foot.push("Listings updated " + fmtDay(data.generatedAt.slice(0, 10)));
     if (data.lastTheaterRefresh) foot.push("Shows as of " + fmtDay(data.lastTheaterRefresh.slice(0, 10)));

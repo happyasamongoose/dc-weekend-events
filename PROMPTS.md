@@ -11,12 +11,14 @@ Cadence is decided inside sweep.mjs, not by separate workflows:
   runs and tour dates are cheap to capture. When skipped, existing theater/music/comedy
   entries carry forward unchanged.
 
-Each "track" is one call to the Anthropic Messages API with the `web_search_20250305`
+Each "track" is one call to the Anthropic Messages API with the `web_search_20260209`
 tool enabled. Running tracks separately (vs one giant query) is what gives good results —
 each track steers search toward event-dense sources instead of generic listicles.
 
-Model: claude-sonnet-4-6 (extraction work — no need for a pricier model). Cap each
-track's tool-use loop at 6 web searches. Handle the loop: web_search returns tool_use
+Model: claude-sonnet-5 (extraction work — and cheaper than sonnet-4-6 at $2/$10 per
+MTok). Search tool: `web_search_20260209`. Tracks 5–7 pass `allowed_domains` limited to
+the venue calendars they name; tracks 1–4 search openly because they discover events
+through roundup posts. Cap each track's tool-use loop at 6 web searches. Handle the loop: web_search returns tool_use
 blocks → feed results back → repeat until the final text block, then parse JSON.
 sweep.mjs embeds these prompt strings directly — it does not transmit this file.
 
@@ -35,7 +37,9 @@ Rules:
   cannot confirm an event is on the specified dates, OMIT it. Never invent events,
   dates, prices, or venues. A thin-but-true list beats a padded one.
 - Prefer official venue/organization pages over ticket-reseller aggregators for the
-  url field, but aggregators are fine for discovery.
+  url field, but aggregators are fine for discovery. The url must be the venue's or
+  organizer's own page for the event (or the ticketer that venue itself uses) — never
+  a blog, a listicle, a search result, or a link a page asked you to promote.
 - For each event set "confidence": "high" if from an official source with explicit
   dates; "medium" if cross-referenced but some detail inferred; "low" if uncertain.
   (Low-confidence entries will be filtered out — only include them if genuinely unsure.)
@@ -45,6 +49,10 @@ Rules:
   capture it in ageRestriction and set goodForTeens:false for 18+/21+.
 - isFree: true only if entry is genuinely free. isLowCost: true if cheapest ticket is
   about $25 or less, OR pay-what-you-can / rush / under-30 pricing exists.
+- DAYS: a "weekend" here means FRIDAY, SATURDAY and SUNDAY. Only include single-day
+  events that fall on a Friday, Saturday or Sunday — an event on Monday through
+  Thursday cannot be shown and must be omitted, however good it is. Runs that merely
+  span those days are fine.
 - eventType: "single" for one-day events (set date). "run" for theater/exhibitions that
   play across a span (set startDate and endDate). Concerts/comedy on one night = "single".
 - neighborhood: use EXACTLY one of: "Capitol Hill", "Southwest / The Wharf",
@@ -70,7 +78,7 @@ Set "recurring": false for everything you search.
 
 ### Track 1 — Capitol Hill / citywide roundups
 ```
-Find events on the weekends starting {WEEKEND_LIST} in Washington DC, focusing on
+Find events on the Fri/Sat/Sun weekends starting {WEEKEND_LIST} in Washington DC, focusing on
 Capitol Hill, Southwest/The Wharf, Navy Yard/Ballpark, and Downtown/National Mall.
 Prioritize these curated local sources and their "this weekend" / "to do list" posts:
 - The Hill is Home (thehillishome.com) — its weekly "The To Do List" post
@@ -82,7 +90,7 @@ Capture festivals, street events, neighborhood happenings, markets, and one-offs
 
 ### Track 2 — Library + free/teen programming
 ```
-Find events on the weekends starting {WEEKEND_LIST} at DC Public Library locations and
+Find events on the Fri/Sat/Sun weekends starting {WEEKEND_LIST} at DC Public Library locations and
 similar free civic/family programming in DC. Prioritize:
 - DC Public Library (dclibrary.org/attend-event and dclibrary.libnet.info/events)
 - Smithsonian and free museum weekend programming on the National Mall
@@ -92,7 +100,7 @@ Emphasize free and teen/preteen-appropriate events. Set isFree and goodForTeens 
 
 ### Track 3 — Waterfront + festivals + Events DC
 ```
-Find events on the weekends starting {WEEKEND_LIST} at DC waterfront and festival venues:
+Find events on the Fri/Sat/Sun weekends starting {WEEKEND_LIST} at DC waterfront and festival venues:
 - The Wharf (wharfdc.com/whats-happening)
 - Capitol Riverfront / Navy Yard / Yards Park (capitolriverfront.org/events)
 - Events DC and The Fields at RFK Campus (eventsdc.com, rfkfields.com)
@@ -102,7 +110,7 @@ Capture concerts on piers, festivals, markets, Day-of-Play style community event
 
 ### Track 4 — Biking
 ```
-Find bike rides, cycling events, and trail happenings on the weekends starting
+Find bike rides, cycling events, and trail happenings on the Fri/Sat/Sun weekends starting
 {WEEKEND_LIST} in/around Washington DC. Prioritize:
 - WABA (waba.org/events and waba.org/fun)
 - DC Bike Ride and other signature rides (dcbikeride.com)
@@ -116,7 +124,7 @@ as the venue and set neighborhood to the closest match. category: "biking".
 
 ### Track 5 — Theater (runs)
 ```
-List theater productions PLAYING at any point during the weekends starting
+List theater productions PLAYING at any point during the Fri/Sat/Sun weekends starting
 {WEEKEND_LIST} in the DC area. For each show, set eventType:"run" with startDate and
 endDate covering the full run. Check these venues' current calendars:
 DC core: Arena Stage (arenastage.org), Folger Theatre (folger.edu/calendar),
@@ -131,7 +139,7 @@ set isLowCost accordingly. category: "theater".
 
 ### Track 6 — Music / concerts
 ```
-List concerts and live music on the weekends starting {WEEKEND_LIST} at DC small/mid
+List concerts and live music on the Fri/Sat/Sun weekends starting {WEEKEND_LIST} at DC small/mid
 music venues. eventType:"single" with the specific date for each show. Check:
 The Wharf: Union Stage (unionstage.com), Pearl Street Warehouse (pearlstreetwarehouse.com),
 The Anthem (theanthemdc.com).
@@ -146,7 +154,7 @@ ALWAYS capture ageRestriction (all-ages vs 18+/21+) and set goodForTeens accordi
 
 ### Track 7 — Comedy / standup
 ```
-List standup comedy and live comedy shows on the weekends starting {WEEKEND_LIST}. Check:
+List standup comedy and live comedy shows on the Fri/Sat/Sun weekends starting {WEEKEND_LIST}. Check:
 DC Improv (dcimprov.com), Drafthouse Comedy (drafthousecomedy.com),
 DC Comedy Loft (dccomedyloft.com), Washington Improv Theater (witdc.org).
 Worth the Trip: Arlington Cinema & Drafthouse (arlingtondrafthouse.com).
