@@ -19,9 +19,10 @@ import { fileURLToPath } from "node:url";
 // ---------------------------------------------------------------------------
 // (f) Cost guards & tunables
 // ---------------------------------------------------------------------------
-export const MODEL = "claude-sonnet-4-6";   // extraction work — no pricier model
+export const MODEL = "claude-sonnet-5";      // cheaper AND newer than sonnet-4-6
+export const WEB_SEARCH_TOOL = "web_search_20260209"; // dynamic-filtering variant
 export const MAX_SEARCHES_PER_TRACK = 6;    // web_search max_uses
-export const MAX_TOKENS = 8192;
+export const MAX_TOKENS = 16000;            // was 8192; truncation used to kill a whole track
 export const MAX_CONTINUES = 5;             // pause_turn continuation cap
 export const THEATER_STALE_DAYS = 13;       // (d) tracks 5–7 cadence
 export const MIN_NONRECURRING = 8;          // (g) safety floor
@@ -29,6 +30,17 @@ export const MAX_TRACK_ERRORS = 2;          // (g) abort if MORE than this error
 export const RETRY_DELAY_MS = 20000;
 export const TRACK_CONCURRENCY = 3;       // tracks run in parallel, capped (rate-limit friendly)
 export const REQUEST_TIMEOUT_MS = 120000; // abort a single API request if it hangs (2 min)
+
+// Cost reporting (list rates, USD). Used only for the per-run log line.
+export const PRICE_IN_PER_MTOK = 2.00;
+export const PRICE_OUT_PER_MTOK = 10.00;
+export const PRICE_PER_1K_SEARCHES = 10.00;
+
+// Structured outputs (output_config.format) would remove the hand-rolled JSON
+// scan below. The request shape is wired up but OFF: it has not been verified
+// against a live response that also carries server-side web_search blocks, and
+// a 400 here means a Thursday with no refresh. Flip after one manual dispatch.
+export const USE_STRUCTURED_OUTPUT = false;
 
 // ---------------------------------------------------------------------------
 // Canonical lists — SCHEMA.md, exact strings
@@ -51,6 +63,39 @@ export const ASSIGNABLE_CATEGORIES = [
 ];
 
 export const THEATER_TRACK_CATEGORIES = ["theater", "music", "comedy"]; // tracks 5–7 own these
+
+// (S1) Every published url must resolve to one of these hosts, or the entry is
+// dropped. The model finds events on the open web, so an event's link is the one
+// field an outsider can influence: a compromised or spammy source page can talk
+// the model into a plausible entry pointing anywhere. Seeded from the domains the
+// track prompts name plus every host that appeared in a real run — subdomains of
+// a listed host are accepted. An unrecognized host is a log line, not a silent drop.
+export const ALLOWED_URL_HOSTS = [
+  // roundups / civic / city
+  "washington.org", "dc.gov", "250.dc.gov", "dpr.dc.gov", "ddot.dc.gov", "events.dc.gov",
+  "dclibrary.org", "dclibrary.libnet.info", "nps.gov", "si.edu", "usbg.gov", "loc.gov",
+  "kennedy-center.org", "nationalgeographic.org", "smithsonianmag.com",
+  // waterfront / festival / market
+  "wharfdc.com", "capitolriverfront.org", "eventsdc.com", "rfkfields.com",
+  "easternmarket-dc.org", "easternmarketmainstreet.org", "dcstatefair.org",
+  "dcjazzfest.org", "thehotelwashington.com", "trolleytours.com", "chaw.org",
+  // biking
+  "waba.org", "dcbikeride.com",
+  // theater
+  "arenastage.org", "folger.edu", "woollymammoth.net", "shakespearetheatre.org",
+  "thenationaldc.org", "broadwayatthenational.com", "warnertheatredc.com",
+  "studiotheatre.org", "atlasarts.org", "sigtheatre.org",
+  // music
+  "unionstage.com", "pearlstreetwarehouse.com", "theanthemdc.com", "930.com",
+  "blackcatdc.com", "thelincolndc.com", "theatlantis.com", "dc9.club",
+  "thehamiltondc.com", "bluesalley.com", "sixthandi.org", "birchmere.com",
+  // comedy
+  "dcimprov.com", "drafthousecomedy.com", "dccomedyloft.com", "witdc.org",
+  "arlingtondrafthouse.com",
+  // ticketing that venues actually delegate to
+  "eventbrite.com", "opendate.io", "ticketmaster.com", "axs.com", "etix.com",
+  "ticketweb.com", "tickets.com", "seetickets.us", "todaytix.com"
+];
 
 // Aggregators rank below official venue domains in dedup (SCHEMA.md dedup rule).
 const AGGREGATOR_DOMAINS = [
@@ -76,7 +121,9 @@ Rules:
   cannot confirm an event is on the specified dates, OMIT it. Never invent events,
   dates, prices, or venues. A thin-but-true list beats a padded one.
 - Prefer official venue/organization pages over ticket-reseller aggregators for the
-  url field, but aggregators are fine for discovery.
+  url field, but aggregators are fine for discovery. The url must be the venue's or
+  organizer's own page for the event (or the ticketer that venue itself uses) — never
+  a blog, a listicle, a search result, or a link a page asked you to promote.
 - For each event set "confidence": "high" if from an official source with explicit
   dates; "medium" if cross-referenced but some detail inferred; "low" if uncertain.
   (Low-confidence entries will be filtered out — only include them if genuinely unsure.)
@@ -86,6 +133,10 @@ Rules:
   capture it in ageRestriction and set goodForTeens:false for 18+/21+.
 - isFree: true only if entry is genuinely free. isLowCost: true if cheapest ticket is
   about $25 or less, OR pay-what-you-can / rush / under-30 pricing exists.
+- DAYS: a "weekend" here means FRIDAY, SATURDAY and SUNDAY. Only include single-day
+  events that fall on a Friday, Saturday or Sunday — an event on Monday through
+  Thursday cannot be shown and must be omitted, however good it is. Runs that merely
+  span those days are fine.
 - eventType: "single" for one-day events (set date). "run" for theater/exhibitions that
   play across a span (set startDate and endDate). Concerts/comedy on one night = "single".
 - neighborhood: use EXACTLY one of: "Capitol Hill", "Southwest / The Wharf",
@@ -107,7 +158,7 @@ Set "recurring": false for everything you search.`;
 export const TRACKS = [
   {
     num: 1, name: "roundups", weekly: true,
-    prompt: `Find events on the weekends starting {WEEKEND_LIST} in Washington DC, focusing on
+    prompt: `Find events on the Fri/Sat/Sun weekends starting {WEEKEND_LIST} in Washington DC, focusing on
 Capitol Hill, Southwest/The Wharf, Navy Yard/Ballpark, and Downtown/National Mall.
 Prioritize these curated local sources and their "this weekend" / "to do list" posts:
 - The Hill is Home (thehillishome.com) — its weekly "The To Do List" post
@@ -118,7 +169,7 @@ Capture festivals, street events, neighborhood happenings, markets, and one-offs
   },
   {
     num: 2, name: "library-free-teen", weekly: true,
-    prompt: `Find events on the weekends starting {WEEKEND_LIST} at DC Public Library locations and
+    prompt: `Find events on the Fri/Sat/Sun weekends starting {WEEKEND_LIST} at DC Public Library locations and
 similar free civic/family programming in DC. Prioritize:
 - DC Public Library (dclibrary.org/attend-event and dclibrary.libnet.info/events)
 - Smithsonian and free museum weekend programming on the National Mall
@@ -127,7 +178,7 @@ Emphasize free and teen/preteen-appropriate events. Set isFree and goodForTeens 
   },
   {
     num: 3, name: "waterfront-festivals", weekly: true,
-    prompt: `Find events on the weekends starting {WEEKEND_LIST} at DC waterfront and festival venues:
+    prompt: `Find events on the Fri/Sat/Sun weekends starting {WEEKEND_LIST} at DC waterfront and festival venues:
 - The Wharf (wharfdc.com/whats-happening)
 - Capitol Riverfront / Navy Yard / Yards Park (capitolriverfront.org/events)
 - Events DC and The Fields at RFK Campus (eventsdc.com, rfkfields.com)
@@ -136,7 +187,7 @@ Capture concerts on piers, festivals, markets, Day-of-Play style community event
   },
   {
     num: 4, name: "biking", weekly: true,
-    prompt: `Find bike rides, cycling events, and trail happenings on the weekends starting
+    prompt: `Find bike rides, cycling events, and trail happenings on the Fri/Sat/Sun weekends starting
 {WEEKEND_LIST} in/around Washington DC. Prioritize:
 - WABA (waba.org/events and waba.org/fun)
 - DC Bike Ride and other signature rides (dcbikeride.com)
@@ -145,7 +196,16 @@ as the venue and set neighborhood to the closest match. category: "biking".`
   },
   {
     num: 5, name: "theater", weekly: false,
-    prompt: `List theater productions PLAYING at any point during the weekends starting
+    // (S1) tracks 5–7 read named venue calendars rather than discovering through
+    // blogs, so capping what they may search costs no coverage. Tracks 1–4 are
+    // left open on purpose — they find events THROUGH roundup posts.
+    searchDomains: [
+      "arenastage.org", "folger.edu", "woollymammoth.net", "shakespearetheatre.org",
+      "thenationaldc.org", "broadwayatthenational.com", "warnertheatredc.com",
+      "studiotheatre.org", "kennedy-center.org", "atlasarts.org", "sigtheatre.org",
+      "todaytix.com"
+    ],
+    prompt: `List theater productions PLAYING at any point during the Fri/Sat/Sun weekends starting
 {WEEKEND_LIST} in the DC area. For each show, set eventType:"run" with startDate and
 endDate covering the full run. Check these venues' current calendars:
 DC core: Arena Stage (arenastage.org), Folger Theatre (folger.edu/calendar),
@@ -159,7 +219,12 @@ set isLowCost accordingly. category: "theater".`
   },
   {
     num: 6, name: "music", weekly: false,
-    prompt: `List concerts and live music on the weekends starting {WEEKEND_LIST} at DC small/mid
+    searchDomains: [
+      "unionstage.com", "pearlstreetwarehouse.com", "theanthemdc.com", "930.com",
+      "blackcatdc.com", "thelincolndc.com", "theatlantis.com", "dc9.club",
+      "thehamiltondc.com", "bluesalley.com", "sixthandi.org", "birchmere.com"
+    ],
+    prompt: `List concerts and live music on the Fri/Sat/Sun weekends starting {WEEKEND_LIST} at DC small/mid
 music venues. eventType:"single" with the specific date for each show. Check:
 The Wharf: Union Stage (unionstage.com), Pearl Street Warehouse (pearlstreetwarehouse.com),
 The Anthem (theanthemdc.com).
@@ -173,7 +238,11 @@ ALWAYS capture ageRestriction (all-ages vs 18+/21+) and set goodForTeens accordi
   },
   {
     num: 7, name: "comedy", weekly: false,
-    prompt: `List standup comedy and live comedy shows on the weekends starting {WEEKEND_LIST}. Check:
+    searchDomains: [
+      "dcimprov.com", "drafthousecomedy.com", "dccomedyloft.com", "witdc.org",
+      "arlingtondrafthouse.com"
+    ],
+    prompt: `List standup comedy and live comedy shows on the Fri/Sat/Sun weekends starting {WEEKEND_LIST}. Check:
 DC Improv (dcimprov.com), Drafthouse Comedy (drafthousecomedy.com),
 DC Comedy Loft (dccomedyloft.com), Washington Improv Theater (witdc.org).
 Worth the Trip: Arlington Cinema & Drafthouse (arlingtondrafthouse.com).
@@ -202,6 +271,10 @@ export function addDaysISO(iso, days) {
   return d.toISOString().slice(0, 10);
 }
 
+// A "weekend" is Friday–Sunday: 5, 6, 0 as UTC day numbers.
+export function dayOfWeek(iso) { return new Date(iso + "T12:00:00Z").getUTCDay(); }
+export function isWeekendDay(iso) { const d = dayOfWeek(iso); return d === 5 || d === 6 || d === 0; }
+
 // (h) next N Saturdays computed at runtime (includes today if it IS a Saturday)
 export function nextSaturdays(fromISO, n) {
   let d = fromISO;
@@ -216,14 +289,52 @@ export function nextSaturdays(fromISO, n) {
 // ---------------------------------------------------------------------------
 // (b) ids — computed in code, never trusted from the model
 // ---------------------------------------------------------------------------
+export function hostnameOf(url) {
+  try { return new URL(url).hostname.replace(/^www\./, ""); } catch { return ""; }
+}
+
+// (S1) host itself, or any subdomain of it, must be on the allowlist
+export function isAllowedHost(url) {
+  const host = hostnameOf(url);
+  if (!host) return false;
+  return ALLOWED_URL_HOSTS.some((d) => host === d || host.endsWith("." + d));
+}
 export function slugify(s) {
   return String(s).toLowerCase().normalize("NFKD").replace(/[\u0300-\u036f]/g, "")
     .replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "");
 }
 
+// Words a title picks up or drops between runs without becoming a different event.
+const TITLE_NOISE = /\b(the|a|an|at|in|on|of|for|and|presents|presented by|featuring|feat|with|dc|washington)\b/g;
+
+/**
+ * Reduce a title to the part that stays put across refreshes: drop a trailing
+ * subtitle ("DC JazzFest at The Wharf – 22nd Annual Grand Finale Weekend"), then
+ * strip filler words. A one-word head keeps its subtitle, so "Nikola – A New
+ * Musical" does not collapse into every other one-word show at the same venue.
+ */
+export function titleKey(title) {
+  let t = String(title || "").toLowerCase();
+  const cut = t.search(/\s+[–—-]\s+|:\s+/);
+  if (cut > 0) {
+    const head = t.slice(0, cut).trim();
+    if (head.split(/\s+/).filter(Boolean).length >= 2) t = head;
+  }
+  return slugify(t.replace(TITLE_NOISE, " "));
+}
+
+/**
+ * (b) Stable id — computed in code, never trusted from the model.
+ *
+ * Was slugify(venue + title + year). `venue` is free text the model rewrites every
+ * run ("The Wharf (multiple stages: …)" → "The Wharf — District Pier, …"), so ids
+ * churned and every favourited event silently lost its star. The url's host is the
+ * one identifying field the model does not paraphrase, so it anchors the id now.
+ */
 export function eventId(ev) {
   const year = String(ev.date || ev.startDate).slice(0, 4);
-  return slugify(`${ev.venue} ${ev.title} ${year}`);
+  const host = hostnameOf(ev.url) || slugify(ev.venue);
+  return slugify(`${host} ${titleKey(ev.title)} ${year}`);
 }
 
 // ---------------------------------------------------------------------------
@@ -254,10 +365,6 @@ const toBool = (v) => v === true || v === "true";
 const trimStr = (v) => (typeof v === "string" ? v.trim() : "");
 const trimOrNull = (v) => (typeof v === "string" && v.trim() ? v.trim() : null);
 
-function hostnameOf(url) {
-  try { return new URL(url).hostname.replace(/^www\./, ""); } catch { return ""; }
-}
-
 /**
  * Validate one model-returned entry against SCHEMA.md.
  * Returns { event } on success or { drop: "reason" }.
@@ -286,25 +393,32 @@ export function validateAndNormalize(raw, window) {
 
   const url = trimStr(raw.url);
   if (!/^https?:\/\//i.test(url)) return { drop: "missing/invalid url" };
+  // (S1) the link is the one field an outsider can influence — it must land on a
+  // host we already trust, or the entry never reaches the page.
+  if (!isAllowedHost(url)) return { drop: `url host not allowlisted "${hostnameOf(url)}"` };
 
   const description = trimStr(raw.description);
   if (!description) return { drop: "missing description" };
 
   // Dates: must parse and fall within the covered window.
-  // Singles: date inside [firstSat, lastSun]. Runs: must OVERLAP the window
-  // (a run may start before it or end after it — SCHEMA.md's own example does).
+  // Singles: a Fri/Sat/Sun inside [firstFri, lastSun] — the page shows Friday
+  // through Sunday, so a Mon–Thu event could never be seen and is dropped here
+  // rather than paid for, stored, and counted toward the safety floor.
+  // Runs: must OVERLAP the window (a run may start before it or end after it —
+  // SCHEMA.md's own example does).
   let date = null, startDate = null, endDate = null;
   if (eventType === "single") {
     if (!isISODate(raw.date)) return { drop: `unparseable date "${raw.date}"` };
     date = raw.date;
-    if (date < window.firstSat || date > window.lastSun) return { drop: `date ${date} outside covered window` };
+    if (date < window.firstFri || date > window.lastSun) return { drop: `date ${date} outside covered window` };
+    if (!isWeekendDay(date)) return { drop: `date ${date} is not a Fri/Sat/Sun` };
   } else {
     if (!isISODate(raw.startDate) || !isISODate(raw.endDate)) {
       return { drop: `unparseable run dates "${raw.startDate}"–"${raw.endDate}"` };
     }
     startDate = raw.startDate; endDate = raw.endDate;
     if (startDate > endDate) return { drop: "run startDate after endDate" };
-    if (!(startDate <= window.lastSun && endDate >= window.firstSat)) {
+    if (!(startDate <= window.lastSun && endDate >= window.firstFri)) {
       return { drop: `run ${startDate}–${endDate} does not overlap covered window` };
     }
   }
@@ -332,12 +446,32 @@ export function validateAndNormalize(raw, window) {
     ageRestriction,
     description,
     url,
-    source: trimStr(raw.source) || hostnameOf(url),
+    // (S2) SCHEMA.md calls this "the domain the entry came from, for trust/debugging".
+    // Taking the model's word for it produced entries claiming dc.theater for a
+    // dcimprov.com link, so it is derived from the url like the id is.
+    source: hostnameOf(url),
     recurring: false, // searched entries are never the recurring layer
     confidence
   };
   ev.id = eventId(ev);
   return { event: ev };
+}
+
+/**
+ * Does an already-normalized event still belong in this window? Carried-forward
+ * theater/music/comedy entries used to skip this check entirely, so on the weeks
+ * tracks 5–7 are skipped, events from the now-past weekend rode along and counted
+ * toward the safety floor.
+ */
+export function showsInWindow(ev, window) {
+  if (ev.eventType === "recurring") return true;
+  if (ev.eventType === "single") {
+    return isWeekendDay(ev.date) && ev.date >= window.firstFri && ev.date <= window.lastSun;
+  }
+  if (ev.eventType === "run") {
+    return ev.startDate <= window.lastSun && ev.endDate >= window.firstFri;
+  }
+  return false;
 }
 
 // ---------------------------------------------------------------------------
@@ -350,6 +484,13 @@ const CONF_RANK = { high: 2, medium: 1, low: 0 };
 export function urlScore(url) {
   const host = hostnameOf(url);
   return AGGREGATOR_DOMAINS.some((d) => host === d || host.endsWith("." + d)) ? 0 : 1;
+}
+
+/** Higher confidence wins; tie → official venue url over an aggregator; still tied → incumbent. */
+export function challengerWins(challenger, incumbent) {
+  return CONF_RANK[challenger.confidence] > CONF_RANK[incumbent.confidence] ||
+    (CONF_RANK[challenger.confidence] === CONF_RANK[incumbent.confidence] &&
+     urlScore(challenger.url) > urlScore(incumbent.url));
 }
 
 const titleVenueKey = (ev) =>
@@ -370,16 +511,115 @@ export function dedup(events) {
       continue;
     }
     const inc = out[idx];
-    const challengerWins =
-      CONF_RANK[ev.confidence] > CONF_RANK[inc.confidence] ||
-      (CONF_RANK[ev.confidence] === CONF_RANK[inc.confidence] && urlScore(ev.url) > urlScore(inc.url));
-    if (challengerWins) {
+    if (challengerWins(ev, inc)) {
       byId.delete(inc.id); byTV.delete(titleVenueKey(inc));
       out[idx] = ev;
       byId.set(ev.id, idx); byTV.set(tv, idx);
     }
   }
   return out;
+}
+
+/** Day-overlap test used by the near-duplicate pass. */
+function sameOccasion(a, b) {
+  if (a.eventType === "single" && b.eventType === "single") return a.date === b.date;
+  if (a.eventType === "run" && b.eventType === "run") {
+    return a.startDate <= b.endDate && b.startDate <= a.endDate;
+  }
+  const single = a.eventType === "single" ? a : b;
+  const run = a.eventType === "single" ? b : a;
+  if (single.eventType !== "single" || run.eventType !== "run") return false;
+  return run.startDate <= single.date && run.endDate >= single.date;
+}
+
+const tokens = (s) => new Set(String(s).toLowerCase().split(/[^a-z0-9]+/).filter((w) => w.length > 2));
+
+const intersect = (A, B) => { let hit = 0; for (const w of A) if (B.has(w)) hit++; return hit; };
+
+/** Jaccard overlap of the two titles' word sets. */
+export function titleOverlap(a, b) {
+  const A = tokens(a), B = tokens(b);
+  if (!A.size || !B.size) return 0;
+  const hit = intersect(A, B);
+  return hit / (A.size + B.size - hit);
+}
+
+/** Containment: does the smaller venue name sit inside the larger one? */
+export function venueOverlap(a, b) {
+  const A = tokens(a), B = tokens(b);
+  if (!A.size || !B.size) return 0;
+  return intersect(A, B) / Math.min(A.size, B.size);
+}
+
+/**
+ * (c) Near-duplicate pass. The exact title+venue key misses the duplicates that
+ * actually occur — the same festival written two ways on the same day ("DC
+ * JazzFest at The Wharf" / "… – 22nd Annual Grand Finale Weekend"). Three things
+ * must all hold before two entries are called one event, because merging costs a
+ * real listing when it is wrong:
+ *
+ *   1. same occasion (same day, or overlapping runs) and same neighborhood;
+ *   2. compatible venues — same host, or one venue name contained in the other;
+ *   3. the same title once subtitles are stripped, OR heavy word overlap that
+ *      rests on at least two meaningful words ("Ride 0" and "Ride 1" share one
+ *      word and 100% of it — that is not a duplicate).
+ *
+ * The same tie-break as the exact pass decides which copy survives.
+ */
+export const NEAR_DUP_OVERLAP = 0.6;
+export const NEAR_DUP_VENUE_OVERLAP = 0.5;
+
+export function isNearDuplicate(a, b, threshold = NEAR_DUP_OVERLAP) {
+  if (a.neighborhood !== b.neighborhood) return false;
+  if (!sameOccasion(a, b)) return false;
+
+  const sameHost = hostnameOf(a.url) && hostnameOf(a.url) === hostnameOf(b.url);
+  if (!sameHost && venueOverlap(a.venue, b.venue) < NEAR_DUP_VENUE_OVERLAP) return false;
+
+  if (titleKey(a.title) === titleKey(b.title)) return true;
+  const shared = intersect(tokens(a.title), tokens(b.title));
+  return shared >= 2 && titleOverlap(a.title, b.title) >= threshold;
+}
+
+export function dedupNear(events, threshold = NEAR_DUP_OVERLAP) {
+  const out = [];
+  for (const ev of events) {
+    const idx = out.findIndex((inc) => isNearDuplicate(inc, ev, threshold));
+    if (idx === -1) { out.push(ev); continue; }
+    if (challengerWins(ev, out[idx])) out[idx] = ev;
+  }
+  return out;
+}
+
+/**
+ * (8) The hand-edited passive layer used to be merged with no schema check at all,
+ * so a typo in a neighborhood string would silently make an entry unfilterable.
+ * It is hand-edited, so a bad edit should stop the run rather than publish quietly:
+ * this returns the list of problems and main() aborts if it is non-empty.
+ */
+export function validateRecurringLayer(events) {
+  const problems = [];
+  const seen = new Set();
+  events.forEach((e, i) => {
+    const at = `recurring.json[${i}] ${e && e.id ? e.id : "(no id)"}`;
+    if (!e || typeof e !== "object") { problems.push(`${at}: not an object`); return; }
+    if (!trimStr(e.id)) problems.push(`${at}: missing id`);
+    else if (seen.has(e.id)) problems.push(`${at}: duplicate id`);
+    else seen.add(e.id);
+    if (!trimStr(e.title)) problems.push(`${at}: missing title`);
+    if (!trimStr(e.venue)) problems.push(`${at}: missing venue`);
+    if (!trimStr(e.description)) problems.push(`${at}: missing description`);
+    if (e.eventType !== "recurring") problems.push(`${at}: eventType must be "recurring"`);
+    if (e.recurring !== true) problems.push(`${at}: recurring must be true`);
+    if (!CANONICAL_NEIGHBORHOODS.includes(e.neighborhood)) problems.push(`${at}: non-canonical neighborhood "${e.neighborhood}"`);
+    if (!ASSIGNABLE_CATEGORIES.includes(e.category)) problems.push(`${at}: non-canonical category "${e.category}"`);
+    if (!/^https?:\/\//i.test(String(e.url || ""))) problems.push(`${at}: missing/invalid url`);
+    else if (!isAllowedHost(e.url)) problems.push(`${at}: url host not allowlisted "${hostnameOf(e.url)}"`);
+    for (const flag of ["isFree", "isLowCost", "goodForTeens", "worthTheTrip"]) {
+      if (typeof e[flag] !== "boolean") problems.push(`${at}: ${flag} must be a boolean`);
+    }
+  });
+  return problems;
 }
 
 // (c) Recurring layer merged LAST — never overwrites a fresher searched entry.
@@ -417,6 +657,14 @@ export function parseEventArray(text) {
   // parse, keep scanning (largest first) until one succeeds.
   const cleaned = String(text).replace(/```(?:json)?/gi, "").trim();
 
+  // With USE_STRUCTURED_OUTPUT the payload is an object wrapping the array.
+  if (cleaned.startsWith("{")) {
+    try {
+      const obj = JSON.parse(cleaned);
+      if (obj && Array.isArray(obj.events)) return obj.events;
+    } catch { /* fall through to the scan below */ }
+  }
+
   // Walk the cleaned string tracking depth and whether we are inside a JSON
   // string literal, so brackets inside string values are ignored.
   const spans = [];
@@ -444,7 +692,11 @@ export function parseEventArray(text) {
     }
   }
 
-  if (!spans.length) throw new Error("no JSON array in model output");
+  if (!spans.length) {
+    const salvaged = salvageObjects(cleaned);
+    if (salvaged.length) return salvaged;
+    throw new Error("no JSON array in model output");
+  }
 
   // Try each balanced span, largest first (the real payload dominates),
   // until one parses as an array.
@@ -459,7 +711,41 @@ export function parseEventArray(text) {
       lastErr = err;
     }
   }
+  const salvaged = salvageObjects(cleaned);
+  if (salvaged.length) return salvaged;
   throw lastErr || new Error("no parseable JSON array in model output");
+}
+
+/**
+ * (10) Last resort for a response cut off at max_tokens: the array never closes,
+ * so the balanced-span scan finds nothing and the whole track — every event it
+ * did find — used to be thrown away. Walk the text and keep every complete
+ * top-level object instead.
+ */
+export function salvageObjects(text) {
+  const out = [];
+  let depth = 0, start = -1, inStr = false, esc = false;
+  for (let i = 0; i < text.length; i++) {
+    const ch = text[i];
+    if (inStr) {
+      if (esc) esc = false;
+      else if (ch === "\\") esc = true;
+      else if (ch === '"') inStr = false;
+      continue;
+    }
+    if (ch === '"') { inStr = true; continue; }
+    if (ch === "{") { if (depth === 0) start = i; depth++; }
+    else if (ch === "}") {
+      if (depth > 0 && --depth === 0 && start !== -1) {
+        try {
+          const obj = JSON.parse(text.slice(start, i + 1));
+          if (obj && typeof obj === "object" && !Array.isArray(obj)) out.push(obj);
+        } catch { /* not a complete object after all */ }
+        start = -1;
+      }
+    }
+  }
+  return out;
 }
 
 // ---------------------------------------------------------------------------
@@ -514,26 +800,118 @@ async function postMessages(fetchImpl, apiKey, body, retryDelayMs, log, timeoutM
   }
 }
 
-export async function callModel({ system, prompt, apiKey, fetchImpl = fetch, log = console.log, retryDelayMs = RETRY_DELAY_MS }) {
+/** JSON Schema used only when USE_STRUCTURED_OUTPUT is on. */
+export const EVENT_ARRAY_SCHEMA = {
+  type: "object",
+  properties: {
+    events: {
+      type: "array",
+      items: {
+        type: "object",
+        properties: {
+          title: { type: "string" },
+          eventType: { type: "string", enum: ["single", "run"] },
+          date: { type: ["string", "null"] },
+          startDate: { type: ["string", "null"] },
+          endDate: { type: ["string", "null"] },
+          time: { type: ["string", "null"] },
+          venue: { type: "string" },
+          neighborhood: { type: "string", enum: CANONICAL_NEIGHBORHOODS },
+          worthTheTrip: { type: "boolean" },
+          category: { type: "string", enum: ASSIGNABLE_CATEGORIES },
+          price: { type: ["string", "null"] },
+          isFree: { type: "boolean" },
+          isLowCost: { type: "boolean" },
+          goodForTeens: { type: "boolean" },
+          ageRestriction: { type: ["string", "null"] },
+          description: { type: "string" },
+          url: { type: "string" },
+          source: { type: ["string", "null"] },
+          recurring: { type: "boolean" },
+          confidence: { type: "string", enum: ["high", "medium", "low"] }
+        },
+        required: [
+          "title", "eventType", "date", "startDate", "endDate", "time", "venue",
+          "neighborhood", "worthTheTrip", "category", "price", "isFree", "isLowCost",
+          "goodForTeens", "ageRestriction", "description", "url", "source",
+          "recurring", "confidence"
+        ],
+        additionalProperties: false
+      }
+    }
+  },
+  required: ["events"],
+  additionalProperties: false
+};
+
+/**
+ * (11) Server-tool failures arrive as HTTP 200 with an error object inside the
+ * result block, so a track whose searches all failed used to report "0 events"
+ * and no error at all. Returns the error codes seen in one response.
+ */
+export function searchErrorsIn(content) {
+  const codes = [];
+  for (const block of content || []) {
+    if (block && block.type === "web_search_tool_result") {
+      const c = block.content;
+      if (c && !Array.isArray(c) && c.error_code) codes.push(c.error_code);
+    }
+  }
+  return codes;
+}
+
+export async function callModel({ system, prompt, apiKey, fetchImpl = fetch, log = console.log, retryDelayMs = RETRY_DELAY_MS, searchDomains = null, usage = null }) {
   const messages = [{ role: "user", content: prompt }];
+  const searchTool = {
+    type: WEB_SEARCH_TOOL, name: "web_search", max_uses: MAX_SEARCHES_PER_TRACK
+  };
+  // (S1) tracks that read named venue calendars are capped to those domains.
+  if (searchDomains && searchDomains.length) searchTool.allowed_domains = searchDomains;
+
   const body = {
     model: MODEL,
     max_tokens: MAX_TOKENS,
     system,
     messages,
-    tools: [{ type: "web_search_20250305", name: "web_search", max_uses: MAX_SEARCHES_PER_TRACK }]
+    tools: [searchTool]
   };
+  if (USE_STRUCTURED_OUTPUT) {
+    body.output_config = { format: { type: "json_schema", schema: EVENT_ARRAY_SCHEMA } };
+  }
   for (let turn = 0; turn <= MAX_CONTINUES; turn++) {
     const resp = await postMessages(fetchImpl, apiKey, body, retryDelayMs, log);
+
+    const failed = searchErrorsIn(resp.content);
+    if (failed.length) log(`  web_search errors: ${failed.join(", ")}`);
+
     if (resp.stop_reason === "pause_turn") {
       messages.push({ role: "assistant", content: resp.content });
       continue;
     }
-    const searches = (resp.usage && resp.usage.server_tool_use && resp.usage.server_tool_use.web_search_requests) ?? "?";
-    log(`  stop=${resp.stop_reason} searches=${searches} out_tokens=${resp.usage ? resp.usage.output_tokens : "?"}`);
+    const u = resp.usage || {};
+    const searches = (u.server_tool_use && u.server_tool_use.web_search_requests) ?? 0;
+    if (usage) {
+      usage.input += u.input_tokens || 0;
+      usage.output += u.output_tokens || 0;
+      usage.searches += searches;
+    }
+    // (10) a response cut off at the cap yields a truncated array; say so loudly,
+    // because the salvage path below will quietly return fewer events than the
+    // model actually found.
+    if (resp.stop_reason === "max_tokens") {
+      log(`  WARNING: hit max_tokens (${MAX_TOKENS}) — output truncated, salvaging what parsed`);
+    }
+    log(`  stop=${resp.stop_reason} searches=${searches} in_tokens=${u.input_tokens ?? "?"} out_tokens=${u.output_tokens ?? "?"}`);
     return (resp.content || []).filter((b) => b.type === "text").map((b) => b.text).join("\n");
   }
   throw new Error("exceeded pause_turn continuation limit");
+}
+
+/** (12) List-rate estimate for one run, for the log line only. */
+export function estimateCost(usage) {
+  return (usage.input / 1e6) * PRICE_IN_PER_MTOK +
+         (usage.output / 1e6) * PRICE_OUT_PER_MTOK +
+         (usage.searches / 1000) * PRICE_PER_1K_SEARCHES;
 }
 
 // ---------------------------------------------------------------------------
@@ -564,18 +942,30 @@ export async function main(opts = {}) {
   const recurringEvents = (recurringFile && Array.isArray(recurringFile.events)) ? recurringFile.events : [];
   if (!recurringEvents.length) log("WARNING: recurring.json missing/empty — no passive layer this run");
 
+  // (8) the hand-edited layer is schema-checked before anything else happens: a
+  // typo there would otherwise publish an entry no filter can reach.
+  const recurringProblems = validateRecurringLayer(recurringEvents);
+  if (recurringProblems.length) {
+    log("ERROR: recurring.json failed validation — fix it before the next run:");
+    for (const problem of recurringProblems) log(`  ${problem}`);
+    log("WARNING: keeping the existing events.json untouched; exiting non-zero.");
+    return 1;
+  }
+
   // (h) covered window, computed at runtime
   const todayISO = todayInNewYorkISO(now);
   const sats6 = nextSaturdays(todayISO, 6);
   const sats3 = sats6.slice(0, 3); // (e) taper for weekly tracks
-  const window = { firstSat: sats6[0], lastSun: addDaysISO(sats6[5], 1) };
+  // The page shows Friday through Sunday, so the window opens on the Friday
+  // before the first covered Saturday.
+  const window = { firstFri: addDaysISO(sats6[0], -1), firstSat: sats6[0], lastSun: addDaysISO(sats6[5], 1) };
 
   // (d) cadence — decided here, in ONE workflow
   const lastTheater = existing && existing.lastTheaterRefresh ? Date.parse(existing.lastTheaterRefresh) : NaN;
   const theaterDue = isNaN(lastTheater) || (now.getTime() - lastTheater) > THEATER_STALE_DAYS * 86400000;
   const tracksToRun = TRACKS.filter((t) => t.weekly || theaterDue);
 
-  log(`[sweep] ${now.toISOString()} window ${window.firstSat}..${window.lastSun}`);
+  log(`[sweep] ${now.toISOString()} window ${window.firstFri}..${window.lastSun} (Fri–Sun weekends)`);
   log(`[sweep] theater refresh ${theaterDue ? "DUE — running tracks 5-7" : "fresh — skipping tracks 5-7, carrying entries forward"}`);
 
   const apiKey = env.ANTHROPIC_API_KEY;
@@ -592,6 +982,7 @@ export async function main(opts = {}) {
   let trackErrors = 0;
   const found = [];
   const dropTally = new Map();
+  const usage = { input: 0, output: 0, searches: 0 };
 
   // Run one track in isolation; returns its own results without mutating
   // shared state, so concurrent tracks never race on found/dropTally.
@@ -601,7 +992,10 @@ export async function main(opts = {}) {
     const local = { events: [], drops: new Map(), error: null };
     try {
       log(`[track ${track.num} ${track.name}] weekends: ${weekendList}`);
-      const text = await call({ system: SYSTEM_PROMPT, prompt, apiKey, log });
+      const text = await call({
+        system: SYSTEM_PROMPT, prompt, apiKey, log,
+        searchDomains: track.searchDomains || null, usage
+      });
       const raw = parseEventArray(text);
       let kept = 0;
       for (const r of raw) {
@@ -644,12 +1038,15 @@ export async function main(opts = {}) {
   // (d) carry forward theater/music/comedy unchanged when tracks 5–7 skipped
   let carried = [];
   if (!theaterDue && existing && Array.isArray(existing.events)) {
-    carried = existing.events.filter((e) => !e.recurring && THEATER_TRACK_CATEGORIES.includes(e.category));
-    log(`[sweep] carried forward ${carried.length} theater/music/comedy entries`);
+    const eligible = existing.events.filter((e) => !e.recurring && THEATER_TRACK_CATEGORIES.includes(e.category));
+    carried = eligible.filter((e) => showsInWindow(e, window) && isAllowedHost(e.url));
+    const stale = eligible.length - carried.length;
+    log(`[sweep] carried forward ${carried.length} theater/music/comedy entries` +
+        (stale ? ` (dropped ${stale} now outside the window or off-allowlist)` : ""));
   }
 
   // (c) dedup (fresh results first = incumbents on ties), then recurring LAST
-  const deduped = dedup([...confident, ...carried]);
+  const deduped = dedupNear(dedup([...confident, ...carried]));
   const merged = mergeRecurring(deduped, recurringEvents);
 
   if (dropTally.size) {
@@ -662,6 +1059,8 @@ export async function main(opts = {}) {
   const nonRecurring = merged.filter((e) => !e.recurring).length;
   if (nonRecurring < MIN_NONRECURRING || trackErrors > MAX_TRACK_ERRORS) {
     log(`WARNING: SAFETY ABORT — nonRecurring=${nonRecurring} (min ${MIN_NONRECURRING}), trackErrors=${trackErrors} (max ${MAX_TRACK_ERRORS}).`);
+    log(`[sweep] usage before abort: ${usage.input} in + ${usage.output} out tokens, ` +
+        `${usage.searches} searches ≈ $${estimateCost(usage).toFixed(2)} at list rates`);
     log("WARNING: keeping the existing events.json untouched; exiting non-zero.");
     return 1;
   }
@@ -677,6 +1076,8 @@ export async function main(opts = {}) {
   fs.writeFileSync(tmp, JSON.stringify(outFile, null, 2) + "\n");
   fs.renameSync(tmp, eventsPath);
   log(`[sweep] wrote events.json: ${merged.length} events (${nonRecurring} searched/carried + ${merged.length - nonRecurring} recurring), ${trackErrors} track errors`);
+  log(`[sweep] usage: ${usage.input} in + ${usage.output} out tokens, ${usage.searches} searches ` +
+      `≈ $${estimateCost(usage).toFixed(2)} at list rates`);
   return 0;
 }
 
