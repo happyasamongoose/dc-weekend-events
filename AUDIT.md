@@ -1,5 +1,10 @@
 # Build audit — DC Weekend Events Planner
 
+> **Status: all findings addressed** on `claude/weekend-planner-build-audit-4mtzae`
+> (`5471961` sweep + tests, `f484526` page, CI and docs). Two items shipped
+> deliberately inert and are marked below: structured outputs, and search-domain
+> filtering on tracks 1–4. Test suites: 196 sweep checks + 68 page checks, green.
+
 Audited 2026-08-28 against `main` @ `e12ad9f` (11 weekly refreshes of production data
 available, 2026-06-14 → 2026-08-27). Everything below was verified by running the code
 or measuring the committed `events.json` history — no findings are speculative.
@@ -31,6 +36,8 @@ Nothing here requires re-architecting. The fixes are local.
 
 ### 1. The test suite crashes; 3 of 108 checks fail
 
+> **FIXED** — scenario 9 now feeds enough events to clear the safety floor, asserts seven tracks, and every scenario is crash-isolated so a throw is recorded as a failed check rather than ending the run. 108 → 196 checks, all green.
+
 `node scripts/test-sweep.mjs` exits with an uncaught `ENOENT` at `test-sweep.mjs:217`
 and prints no results at all.
 
@@ -50,12 +57,16 @@ the run. `SETUP.md` also advertises "96 checks" — it is 108.
 
 ### 2. Nothing runs the tests
 
+> **FIXED** — `test.yml` runs both suites on every push and PR; `refresh.yml` runs them before it spends anything on the API.
+
 `.github/workflows/` contains only `refresh.yml`. The suite has been red since it was
 written and no one was told. Add a `test.yml` on push/PR, and run
 `node scripts/test-sweep.mjs` as a step in `refresh.yml` before the sweep — a broken
 parser should stop a run before it spends money.
 
 ### 3. A failed refresh is invisible to everyone
+
+> **FIXED** — the page shows a banner once the data is more than 10 days old, and a failed run files (or comments on) a GitHub issue.
 
 There is no commit for **Thursday 2026-07-09**; every other Thursday since 06-14 has one.
 Because `generatedAt` is rewritten on every successful run, `events.json` always differs
@@ -78,6 +89,8 @@ Fix, both halves:
 ## P2 — Data quality and wasted spend
 
 ### 4. Favorites break because ids churn
+
+> **FIXED** — ids are `slugify(url host + normalized title + year)`. Favourites store a title+neighborhood fingerprint alongside the id, match on either, and heal the record to the new id; verified in a browser against a full id churn. Old v1 records migrate on load.
 
 `eventId()` (`sweep.mjs:224`) is `slugify(venue + title + year)`, and `venue` is
 free text the model rewrites every run. Measured across the 08-20 → 08-27 refreshes:
@@ -106,6 +119,8 @@ existing stars survive the change.
 
 ### 5. Weekday events are stored but can never display
 
+> **FIXED** — a weekend is Friday–Sunday now, in the sweep, the page, the prompts and SCHEMA.md. Friday events are kept and shown; Mon–Thu are dropped at validation.
+
 `validateAndNormalize` (`sweep.mjs:298`) only requires a single's date to be inside the
 covered window, but `showsThisWeekend` matches Saturday or Sunday only. Current file:
 **11 of 50 singles (22%)** are Mon–Fri. Historically 20–37% (08-20: 25 of 68).
@@ -119,6 +134,8 @@ family planning a weekend — accept Friday evenings deliberately and extend
 
 ### 6. Dedup misses the duplicates that actually occur
 
+> **FIXED** — a second pass merges same-day, same-neighborhood entries with compatible venues and either an identical subtitle-stripped title or heavy word overlap resting on ≥2 meaningful words. It catches the JazzFest and Pints for Paws pairs; the Female Athlete / Women in Sports pair shares too few words and is still missed.
+
 The dedup key is exact normalized `title + venue` (`sweep.mjs:386`), so the same event
 described two ways survives twice. In the current file:
 
@@ -131,12 +148,16 @@ overlap of the title above a threshold. Stable ids (finding 4) fix part of this 
 
 ### 7. Carried-forward theater entries are never re-validated
 
+> **FIXED** — carried entries are re-checked against the new window and the host allowlist.
+
 When tracks 5–7 are skipped, `sweep.mjs:647` carries entries forward by category alone —
 no window check. On the alternate week the window has moved on, so singles from the
 now-past weekend ride along, and they count toward the safety floor. Re-run carried
 entries through `validateAndNormalize` against the new window before merging.
 
 ### 8. `recurring.json` bypasses validation entirely
+
+> **FIXED** — schema-checked before any API call; a bad hand-edit stops the run and names the offending field.
 
 `mergeRecurring` (`sweep.mjs:386`) appends the hand-edited layer without any schema
 check. Today's file is clean, but a typo in a neighborhood string would silently make an
@@ -149,6 +170,8 @@ hand-edited, so a bad edit should stop the run) and escape the category on the p
 ## P3 — Model and API
 
 ### 9. The model and the search tool are a generation behind
+
+> **FIXED** — `claude-sonnet-5` and `web_search_20260209`. **Structured outputs are wired but OFF** (`USE_STRUCTURED_OUTPUT`): the request shape is not verified against a live response that also carries server-side search blocks, and a 400 means a Thursday with no refresh. Flip it after one manual dispatch.
 
 `sweep.mjs:22` pins `claude-sonnet-4-6` ($3/$15 per MTok) and `sweep.mjs:524` uses
 `web_search_20250305`. `claude-sonnet-5` is both **cheaper ($2/$10) and newer** — a
@@ -164,6 +187,8 @@ dispatch before relying on it.
 
 ### 10. A truncated response throws away the whole track
 
+> **FIXED** — `max_tokens` raised to 16000, `stop_reason: max_tokens` logged loudly, and a truncated array salvages its complete objects.
+
 `MAX_TOKENS` is 8192 (`sweep.mjs:521`). If a track's array is cut off at the cap,
 `parseEventArray` finds no balanced span and throws — verified: the track is counted as
 an error and every event it found is discarded. Three such tracks trip the safety abort.
@@ -174,6 +199,8 @@ dropping all of them.
 
 ### 11. Search failures look identical to "found nothing"
 
+> **FIXED** — `web_search_tool_result` error blocks are detected and logged.
+
 Web-search errors come back as HTTP 200 with an error object inside the
 `web_search_tool_result` block; `callModel` only reads `text` blocks, so a track whose
 searches all failed reports zero events and no error. Inspect the result blocks and log
@@ -181,12 +208,16 @@ searches all failed reports zero events and no error. Inspect the result blocks 
 
 ### 12. Cost is unobservable
 
+> **FIXED** — input/output tokens and search counts accumulate per run and print with a list-rate estimate, on the abort path too.
+
 The per-track log prints `output_tokens` only. Log `input_tokens`, cache figures, and
 `server_tool_use.web_search_requests`, and print a per-run estimate (searches bill at
 $10 per 1,000). Rough current cost is $2–3 per run — worth knowing exactly, given the
 console spend cap is the only backstop.
 
 ### 13. The prompts name their sources; the tool doesn't enforce them
+
+> **PARTLY FIXED, deliberately** — tracks 5–7 pass `allowed_domains`; tracks 1–4 stay open because they discover events *through* roundup posts, and narrowing them risks a thin run that trips the safety abort. The link-side allowlist (S1) is what protects the tap.
 
 Every track lists its domains in prose. Passing them as `allowed_domains` on the
 web_search tool (per track) would cut aggregator drift, which is what feeds the
@@ -200,16 +231,16 @@ inconsistent venue strings in finding 4.
     14 of 25 current runs start after the first covered Saturday, so a two-day September
     festival reads as if it is already running. Show `Sep 5–6` for a future or short run
     and reserve "Now through" for one in progress.
-15. **No staleness signal** — see finding 3.
+15. **FIXED** — staleness banner, see finding 3.
 16. **`events-sample.json` is frozen at 2026-06-13**, so the `?data=sample` QA path that
     `SETUP.md` documents now renders six past weekends with the first one labelled
     "This Weekend". Regenerate the fixture with relative dates, or compute its weekends
     at load time.
-17. **Zero tests for the page logic.** `index.html` fences its pure functions between
+17. **FIXED** — **there were zero tests for the page logic.** `scripts/test-page.mjs` now runs 68 checks over that block. `index.html` fences its pure functions between
     `/*__LOGIC_START__*/` and `/*__LOGIC_END__*/` — clearly built to be extracted — but
     nothing extracts them. `matchesTab`, `showsThisWeekend`, `gcalUrl`, and
     `nearestWeekendIndex` could be tested by the existing runner for very little work.
-18. **Far weekends are thin by design** — weekends 4–6 carry only 3–4 dated singles
+18. **FIXED** — **far weekends are thin by design** — weekends 4–6 carry only 3–4 dated singles
     because tracks 1–4 taper to 3 weekends. That's the right trade, but the picker
     presents all six identically. A "refreshed closer to the date" note would set
     expectations.
@@ -238,6 +269,8 @@ holds event ids and nothing else. All 85 current URLs are https.
 
 ### S1 · Medium — nothing constrains where an event's link points
 
+> **FIXED** — every published url must resolve to an allowlisted host (or subdomain), seeded from the prompt domains plus every host seen in a real run. Off-allowlist entries are dropped and logged.
+
 `validateAndNormalize` (`sweep.mjs:298` onward) accepts any `https?://` URL. The model
 finds events by searching the open web, so a spammy or compromised source page is the
 one input an outsider controls: prompt-injected text on such a page can produce a
@@ -250,6 +283,8 @@ domains), `allowed_domains` on the web_search tool per track, and drop or flag e
 whose host isn't recognized rather than publishing them.
 
 ### S2 · Medium — `source` can't be trusted, so provenance can't be audited
+
+> **FIXED** — derived from the url host in code, like the id.
 
 `SCHEMA.md` defines `source` as "domain the entry came from, for trust/debugging", but
 `sweep.mjs` takes the model's string and only falls back to the URL host. **53 of 85**
@@ -265,6 +300,8 @@ The field you would reach for while investigating a bad link is model prose. Fix
 it in code from the URL host, exactly as `id` is — delete the `raw.source ||` precedence.
 
 ### S3 · Low — HTML attribute injection via `category`
+
+> **FIXED** — the category selects a CSS class from the known list; nothing untrusted enters a style attribute.
 
 `index.html:284` builds `style="color:var(--cat-<category>, …)"` by string concatenation
 with no escaping, unlike every other field on the card. Verified to break out of the
@@ -282,12 +319,16 @@ map the category to a CSS class instead of interpolating into a style attribute.
 
 ### S4 · Low — Actions pinned to floating major tags
 
+> **FIXED** — both actions pinned to commit SHAs, `permissions` scoped to the job.
+
 `actions/checkout@v4` and `actions/setup-node@v4` resolve to whatever those tags point
 at. A compromised tag executes inside a job that holds `contents: write` and, on the
 sweep step, the Anthropic key. Pin both to full commit SHAs, and move `permissions` from
 the workflow onto the job so the scope is stated where it's used.
 
 ### S5 · Low — no Content-Security-Policy
+
+> **FIXED** — a meta policy blocks third-party script, cross-origin fetch and plugins. Inline script/style still need `unsafe-inline` (no build step to hash them), and `frame-ancestors` is header-only, so framing is not covered — both noted in the file.
 
 GitHub Pages can't set headers, but a `<meta http-equiv="Content-Security-Policy">`
 would cap the blast radius of any future escaping mistake (S3 among them). The page is
@@ -297,6 +338,8 @@ the script and style into files: `default-src 'none'; script-src 'self'; style-s
 'self'; connect-src 'self'`.
 
 ### S6 · Info — the whole repo is world-readable
+
+> **NOTED** — written into SETUP.md as a standing caution.
 
 Pages serves from the repo root of a public repo, so everything committed is public,
 `recurring.json` included. Keep it that way deliberately: no home address as a "venue",

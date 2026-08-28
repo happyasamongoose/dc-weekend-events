@@ -16,6 +16,11 @@ the data contract is [SCHEMA.md](SCHEMA.md).
    layer from `recurring.json`, so it's never blank. Review the first few runs
    manually before trusting the Thursday schedule.
 
+One standing caution: the repo is public and Pages serves its whole tree, so
+everything committed is world-readable — `recurring.json` included. Keep it to
+public places: no home address as a "venue", no children's names, no notes about
+when the house is empty.
+
 Handy while verifying:
 
 - `https://<you>.github.io/<repo>/?data=sample` — view the page against the
