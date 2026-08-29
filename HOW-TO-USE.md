@@ -60,7 +60,7 @@ Two extra buttons:
   everywhere else in DC. Turn this on if the page feels empty, or if you're
   hunting for music (a lot of the venues are on U Street).
 - **Worth the Trip** — events in Arlington and Maryland. It's **off** by default,
-  because they need a proper journey. Turn it on if you don't mind travelling.
+  because they need a proper journey. Turn it on if you don't mind traveling.
 
 ---
 
@@ -68,10 +68,10 @@ Two extra buttons:
 
 Each event is one card. From the top:
 
-- A **coloured tag** saying what type it is — Music, Theater, Outdoor and so on.
+- A **colored tag** saying what type it is — Music, Theater, Outdoor and so on.
 - **Badges**, when they apply:
   - 🟢 **Free** — costs nothing to get in.
-  - 🟡 **Low-cost** — roughly £/$25 or less, or it has pay-what-you-can, rush or
+  - 🟡 **Low-cost** — roughly $25 or less, or it has pay-what-you-can, rush or
     under-30 tickets.
   - 🔵 **Teens OK** — good for your age group.
   - 🔴 **18+** or **21+** — *adults only.* Most comedy clubs and some bars are
