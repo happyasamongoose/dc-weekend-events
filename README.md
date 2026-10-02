@@ -128,7 +128,7 @@ single column, large tap targets, sticky weekend picker + tabs at top.
 - Decide cadence: always run tracks 1–4; run tracks 5–7 only if lastTheaterRefresh is
   older than 13 days, otherwise carry forward existing theater/music/comedy entries.
 - For each track: POST to Anthropic Messages API (model: claude-sonnet-5 — cheaper and
-  newer than sonnet-4-6, and this is extraction work) with the `web_search_20260209`
+  newer than sonnet-4-6, and this is extraction work) with the `web_search_20250305`
   tool; run the tool-use loop, capped at 6 searches per track; strip stray fences;
   JSON.parse, salvaging complete objects if the response was truncated; wrap each track
   in try/catch so one failure doesn't kill the run. Tracks 5–7 pass `allowed_domains` —

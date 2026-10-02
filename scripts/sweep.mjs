@@ -13,6 +13,8 @@
 // =============================================================================
 
 import fs from "node:fs";
+import http from "node:http";
+import https from "node:https";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -20,7 +22,10 @@ import { fileURLToPath } from "node:url";
 // (f) Cost guards & tunables
 // ---------------------------------------------------------------------------
 export const MODEL = "claude-sonnet-5";      // cheaper AND newer than sonnet-4-6
-export const WEB_SEARCH_TOOL = "web_search_20260209"; // dynamic-filtering variant
+// The 20260209 variant's dynamic filtering runs code execution per search and
+// pushed a single track past five minutes and ~125K input tokens; the basic
+// variant is what the pipeline ran on for eleven successful weeks.
+export const WEB_SEARCH_TOOL = "web_search_20250305";
 export const MAX_SEARCHES_PER_TRACK = 6;    // web_search max_uses
 export const MAX_TOKENS = 16000;            // was 8192; truncation used to kill a whole track
 export const MAX_CONTINUES = 5;             // pause_turn continuation cap
@@ -770,6 +775,49 @@ export function salvageObjects(text) {
 // ---------------------------------------------------------------------------
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
+/**
+ * (R1) Minimal fetch-shaped request over node:http(s). The built-in fetch fails
+ * with a bare "fetch failed" when response headers take more than 300 s — and a
+ * non-streaming Messages request sends none until the answer is complete — so
+ * the 8-minute cap below could never be reached through it. This honours the
+ * AbortSignal and otherwise waits as long as the caller allows.
+ */
+export function nodeFetch(url, init = {}) {
+  return new Promise((resolve, reject) => {
+    const u = new URL(url);
+    const mod = u.protocol === "http:" ? http : https;
+    const req = mod.request({
+      method: init.method || "GET",
+      hostname: u.hostname,
+      port: u.port || undefined,
+      path: u.pathname + u.search,
+      headers: init.headers || {},
+      timeout: 0
+    }, (res) => {
+      const chunks = [];
+      res.on("data", (c) => chunks.push(c));
+      res.on("error", reject);
+      res.on("end", () => {
+        const text = Buffer.concat(chunks).toString("utf8");
+        resolve({
+          ok: res.statusCode >= 200 && res.statusCode < 300,
+          status: res.statusCode,
+          text: async () => text,
+          json: async () => JSON.parse(text)
+        });
+      });
+    });
+    req.on("error", (e) => reject(e));
+    if (init.signal) {
+      const onAbort = () => req.destroy(Object.assign(new Error("aborted"), { name: "AbortError" }));
+      if (init.signal.aborted) onAbort();
+      else init.signal.addEventListener("abort", onAbort, { once: true });
+    }
+    if (init.body) req.write(init.body);
+    req.end();
+  });
+}
+
 async function postMessages(fetchImpl, apiKey, body, retryDelayMs, log, timeoutMs = REQUEST_TIMEOUT_MS, usage = null) {
   for (let attempt = 0; ; attempt++) {
     const ctrl = new AbortController();
@@ -795,7 +843,8 @@ async function postMessages(fetchImpl, apiKey, body, retryDelayMs, log, timeoutM
         if (usage) usage.aborted++;
         throw new Error(`Anthropic API request timed out after ${Math.round(timeoutMs / 1000)}s (not retried)`);
       }
-      throw e;
+      const why = (e && e.cause && (e.cause.code || e.cause.message)) || (e && e.code) || (e && e.message) || String(e);
+      throw new Error(`Anthropic API transport error: ${why}`);
     } finally {
       clearTimeout(timer);
     }
@@ -871,7 +920,7 @@ export function searchErrorsIn(content) {
   return codes;
 }
 
-export async function callModel({ system, prompt, apiKey, fetchImpl = fetch, log = console.log, retryDelayMs = RETRY_DELAY_MS, searchDomains = null, usage = null, timeoutMs = REQUEST_TIMEOUT_MS }) {
+export async function callModel({ system, prompt, apiKey, fetchImpl = nodeFetch, log = console.log, retryDelayMs = RETRY_DELAY_MS, searchDomains = null, usage = null, timeoutMs = REQUEST_TIMEOUT_MS }) {
   const messages = [{ role: "user", content: prompt }];
   const searchTool = {
     type: WEB_SEARCH_TOOL, name: "web_search", max_uses: MAX_SEARCHES_PER_TRACK
@@ -1120,9 +1169,10 @@ export async function main(opts = {}) {
 }
 
 export function usageLine(usage) {
-  const aborted = usage.aborted ? `, ${usage.aborted} of ${usage.attempted} requests aborted (likely still billed)` : "";
+  const attempted = usage.attempted == null ? "" : `; ${usage.attempted} request(s) attempted`;
+  const aborted = usage.aborted ? `, ${usage.aborted} aborted on timeout (likely still billed)` : "";
   return `usage: ${usage.input} in + ${usage.output} out tokens, ${usage.searches} searches ` +
-         `≈ $${estimateCost(usage).toFixed(2)} at list rates for completed requests${aborted}`;
+         `≈ $${estimateCost(usage).toFixed(2)} at list rates for completed requests${attempted}${aborted}`;
 }
 
 export function parseTrackList(v) {

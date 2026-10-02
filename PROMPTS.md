@@ -11,12 +11,14 @@ Cadence is decided inside sweep.mjs, not by separate workflows:
   runs and tour dates are cheap to capture. When skipped, existing theater/music/comedy
   entries carry forward unchanged.
 
-Each "track" is one call to the Anthropic Messages API with the `web_search_20260209`
+Each "track" is one call to the Anthropic Messages API with the `web_search_20250305`
 tool enabled. Running tracks separately (vs one giant query) is what gives good results —
 each track steers search toward event-dense sources instead of generic listicles.
 
 Model: claude-sonnet-5 (extraction work — and cheaper than sonnet-4-6 at $2/$10 per
-MTok). Search tool: `web_search_20260209`. Tracks 5–7 pass `allowed_domains` limited to
+MTok). Search tool: `web_search_20250305` — the basic variant on purpose: the
+`_20260209` dynamic-filtering variant ran one track past five minutes and ~125K
+input tokens. Tracks 5–7 pass `allowed_domains` limited to
 the venue calendars they name; tracks 1–4 search openly because they discover events
 through roundup posts. Cap each track's tool-use loop at 6 web searches. Handle the loop: web_search returns tool_use
 blocks → feed results back → repeat until the final text block, then parse JSON.
