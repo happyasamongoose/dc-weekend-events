@@ -143,7 +143,7 @@ set isLowCost accordingly. category: "theater".
 ```
 List concerts and live music on the Fri/Sat/Sun weekends starting {WEEKEND_LIST} at DC small/mid
 music venues. eventType:"single" with the specific date for each show. Check:
-The Wharf: Union Stage (unionstage.com), Pearl Street Warehouse (pearlstreetwarehouse.com),
+The Wharf: Union Stage (unionstagepresents.com), Pearl Street Warehouse (pearlstreetwarehouse.com),
 The Anthem (theanthemdc.com).
 U Street: 9:30 Club (930.com), Black Cat (blackcatdc.com/schedule.html),
 Lincoln Theatre (thelincolndc.com), The Atlantis (theatlantis.com), DC9 (dc9.club).
