@@ -6,6 +6,7 @@
 // Run: node scripts/test-sweep.mjs
 // =============================================================================
 import fs from "node:fs";
+import http from "node:http";
 import os from "node:os";
 import path from "node:path";
 import {
@@ -14,7 +15,7 @@ import {
   urlScore, normalizeNeighborhood, normalizeCategory, normalizeAge, TRACKS, TRACK_CONCURRENCY, REQUEST_TIMEOUT_MS,
   titleKey, hostnameOf, isAllowedHost, showsInWindow, dedupNear, titleOverlap,
   validateRecurringLayer, salvageObjects, searchErrorsIn, estimateCost, isWeekendDay, isNearDuplicate,
-  SEARCH_DOMAIN_FILTER, parseTrackList, usageLine, renderStepSummary,
+  SEARCH_DOMAIN_FILTER, parseTrackList, usageLine, renderStepSummary, nodeFetch,
   MODEL, WEB_SEARCH_TOOL, MAX_TOKENS, USE_STRUCTURED_OUTPUT, ALLOWED_URL_HOSTS
 } from "./sweep.mjs";
 
@@ -248,7 +249,7 @@ t("parse: nested array in object", Array.isArray(parseEventArray('[{"tags":["a",
   t("callModel continues pause_turn with assistant content", calls[2].messages.length === 2 && calls[2].messages[1].role === "assistant");
   t("callModel returns final text", parseEventArray(text)[0].ok === true);
   t("callModel sends web_search max_uses 6", calls[0].tools[0].type === WEB_SEARCH_TOOL && calls[0].tools[0].max_uses === 6);
-  t("callModel uses the current search tool", WEB_SEARCH_TOOL === "web_search_20260209");
+  t("callModel uses the basic search tool (the fast one)", WEB_SEARCH_TOOL === "web_search_20250305");
   t("callModel uses sonnet 5", calls[0].model === "claude-sonnet-5" && MODEL === "claude-sonnet-5");
   t("callModel caps max_tokens", calls[0].max_tokens === MAX_TOKENS && MAX_TOKENS >= 16000);
   t("no search domain filter unless a track asks", calls[0].tools[0].allowed_domains === undefined);
@@ -591,7 +592,7 @@ await scenario("s9", async () => {
   }
   t("PROMPTS.md states the Fri-Sun rule", /FRIDAY, SATURDAY and SUNDAY/.test(md));
   t("PROMPTS.md names the current model", md.includes("claude-sonnet-5"));
-  t("PROMPTS.md names the current search tool", md.includes("web_search_20260209"));
+  t("PROMPTS.md names the current search tool", md.includes(WEB_SEARCH_TOOL));
   t("system prompt states the Fri-Sun rule", /FRIDAY, SATURDAY and SUNDAY/.test(md));
 }
 
@@ -618,9 +619,59 @@ await scenario("s9", async () => {
   t("timed-out request counted as attempted", usage.attempted === 1);
   t("timed-out request counted as aborted", usage.aborted === 1);
   t("REQUEST_TIMEOUT_MS is at least 8 minutes", REQUEST_TIMEOUT_MS >= 480000);
-  t("usage line names aborted requests", /1 of 1 requests aborted/.test(usageLine(usage)));
-  t("usage line is quiet when nothing aborted", !/aborted/.test(usageLine({ input: 1, output: 1, searches: 1, attempted: 1, aborted: 0 })));
+  t("usage line names aborted requests", /1 aborted on timeout/.test(usageLine(usage)));
+  t("usage line always counts attempts", /1 request\(s\) attempted/.test(usageLine({ input: 1, output: 1, searches: 1, attempted: 1, aborted: 0 })));
+  t("usage line is quiet about aborts when none", !/aborted/.test(usageLine({ input: 1, output: 1, searches: 1, attempted: 1, aborted: 0 })));
 }
+
+// ---------------------------------------------------------------------------
+// (R1) the transport: a real request over a local server, slow headers, abort
+// ---------------------------------------------------------------------------
+await scenario("transport", async () => {
+  const server = http.createServer((req, res) => {
+    let body = "";
+    req.on("data", (c) => body += c);
+    req.on("end", () => {
+      const delay = Number(new URL(req.url, "http://x").searchParams.get("delay") || 0);
+      setTimeout(() => {
+        res.writeHead(req.url.startsWith("/fail") ? 500 : 200, { "content-type": "application/json" });
+        res.end(JSON.stringify({ echoed: JSON.parse(body || "null"), method: req.method, hdr: req.headers["x-api-key"] }));
+      }, delay);
+    });
+  });
+  await new Promise((r) => server.listen(0, "127.0.0.1", r));
+  const base = `http://127.0.0.1:${server.address().port}`;
+  try {
+    const r = await nodeFetch(base + "/ok", { method: "POST", headers: { "x-api-key": "k", "content-type": "application/json" }, body: JSON.stringify({ a: 1 }) });
+    const j = await r.json();
+    t("transport posts the body and headers", r.ok && r.status === 200 && j.echoed.a === 1 && j.method === "POST" && j.hdr === "k");
+    const f = await nodeFetch(base + "/fail", { method: "POST", body: "{}" });
+    t("transport reports a non-2xx without throwing", !f.ok && f.status === 500 && (await f.text()).length > 0);
+    // headers delayed longer than the cap -> aborted, error says timed out, not retried
+    const usage = { input: 0, output: 0, searches: 0, attempted: 0, aborted: 0 };
+    let err = null;
+    try {
+      await callModel({ system: "s", prompt: "p", apiKey: "k", log: quiet, retryDelayMs: 1, usage, timeoutMs: 80,
+        fetchImpl: (url, init) => nodeFetch(base + "/slow?delay=2000", init) });
+    } catch (e) { err = e; }
+    t("transport honours the abort cap", !!err && /timed out/.test(err.message));
+    t("transport abort counted", usage.attempted === 1 && usage.aborted === 1);
+    // a slow-but-within-cap response still completes
+    const ok = await callModel({ system: "s", prompt: "p", apiKey: "k", log: quiet, retryDelayMs: 1, timeoutMs: 3000,
+      fetchImpl: async (url, init) => {
+        const r2 = await nodeFetch(base + "/ok?delay=150", init);
+        const j2 = await r2.json();
+        return { ok: true, status: 200, text: async () => "", json: async () => ({ stop_reason: "end_turn", usage: {}, content: [{ type: "text", text: JSON.stringify([{ got: j2.echoed.model }]) }] }) };
+      } });
+    t("transport completes a slow response under the cap", parseEventArray(ok)[0].got === MODEL);
+    t("transport error is descriptive", await (async () => {
+      try { await callModel({ system: "s", prompt: "p", apiKey: "k", log: quiet, retryDelayMs: 1, fetchImpl: () => nodeFetch("http://127.0.0.1:1/nope", { method: "POST", body: "{}" }) }); return false; }
+      catch (e) { return /transport error: (ECONNREFUSED|connect)/.test(e.message); }
+    })());
+  } finally {
+    server.close();
+  }
+});
 
 // ---------------------------------------------------------------------------
 // (R5) track subsets and dry runs
