@@ -83,6 +83,8 @@ t("allowlist rejects an unknown host", !isAllowedHost("https://free-dc-events.ex
 t("allowlist rejects a lookalike suffix", !isAllowedHost("https://not-930.com/x"));
 t("allowlist rejects garbage", !isAllowedHost("javascript:alert(1)"));
 t("allowlist is non-trivial", ALLOWED_URL_HOSTS.length > 30);
+t("allowlist knows Union Stage's real domain", isAllowedHost("https://www.unionstagepresents.com/shows/x"));
+t("max_tokens leaves room for a full music track", MAX_TOKENS >= 32000);
 
 // ---------------------------------------------------------------------------
 // Fri–Sun weekend
@@ -251,7 +253,7 @@ t("parse: nested array in object", Array.isArray(parseEventArray('[{"tags":["a",
   t("callModel sends web_search max_uses 6", calls[0].tools[0].type === WEB_SEARCH_TOOL && calls[0].tools[0].max_uses === 6);
   t("callModel uses the basic search tool (the fast one)", WEB_SEARCH_TOOL === "web_search_20250305");
   t("callModel uses sonnet 5", calls[0].model === "claude-sonnet-5" && MODEL === "claude-sonnet-5");
-  t("callModel caps max_tokens", calls[0].max_tokens === MAX_TOKENS && MAX_TOKENS >= 16000);
+  t("callModel caps max_tokens", calls[0].max_tokens === MAX_TOKENS && MAX_TOKENS >= 32000);
   t("no search domain filter unless a track asks", calls[0].tools[0].allowed_domains === undefined);
   t("structured output stays off until verified live", USE_STRUCTURED_OUTPUT === false && calls[0].output_config === undefined);
 

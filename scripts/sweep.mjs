@@ -27,7 +27,9 @@ export const MODEL = "claude-sonnet-5";      // cheaper AND newer than sonnet-4-
 // variant is what the pipeline ran on for eleven successful weeks.
 export const WEB_SEARCH_TOOL = "web_search_20250305";
 export const MAX_SEARCHES_PER_TRACK = 6;    // web_search max_uses
-export const MAX_TOKENS = 16000;            // was 8192; truncation used to kill a whole track
+// 16000 was hit by the music track alone (22 events, still writing). Output is
+// $10/MTok, so 32K is at most $0.32 per track, and the salvage path backstops it.
+export const MAX_TOKENS = 32000;
 export const MAX_CONTINUES = 5;             // pause_turn continuation cap
 export const THEATER_STALE_DAYS = 13;       // (d) tracks 5–7 cadence
 export const MIN_NONRECURRING = 8;          // (g) safety floor
@@ -105,7 +107,8 @@ export const ALLOWED_URL_HOSTS = [
   "thenationaldc.org", "broadwayatthenational.com", "warnertheatredc.com",
   "studiotheatre.org", "atlasarts.org", "sigtheatre.org",
   // music
-  "unionstage.com", "pearlstreetwarehouse.com", "theanthemdc.com", "930.com",
+  "unionstage.com", "unionstagepresents.com", // Union Stage's real site is the second
+  "pearlstreetwarehouse.com", "theanthemdc.com", "930.com",
   "blackcatdc.com", "thelincolndc.com", "theatlantis.com", "dc9.club",
   "thehamiltondc.com", "bluesalley.com", "sixthandi.org", "birchmere.com",
   // comedy
@@ -239,13 +242,13 @@ set isLowCost accordingly. category: "theater".`
   {
     num: 6, name: "music", weekly: false,
     searchDomains: [
-      "unionstage.com", "pearlstreetwarehouse.com", "theanthemdc.com", "930.com",
+      "unionstagepresents.com", "pearlstreetwarehouse.com", "theanthemdc.com", "930.com",
       "blackcatdc.com", "thelincolndc.com", "theatlantis.com", "dc9.club",
       "thehamiltondc.com", "bluesalley.com", "sixthandi.org", "birchmere.com"
     ],
     prompt: `List concerts and live music on the Fri/Sat/Sun weekends starting {WEEKEND_LIST} at DC small/mid
 music venues. eventType:"single" with the specific date for each show. Check:
-The Wharf: Union Stage (unionstage.com), Pearl Street Warehouse (pearlstreetwarehouse.com),
+The Wharf: Union Stage (unionstagepresents.com), Pearl Street Warehouse (pearlstreetwarehouse.com),
 The Anthem (theanthemdc.com).
 U Street: 9:30 Club (930.com), Black Cat (blackcatdc.com/schedule.html),
 Lincoln Theatre (thelincolndc.com), The Atlantis (theatlantis.com), DC9 (dc9.club).
