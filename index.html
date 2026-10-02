@@ -222,6 +222,21 @@ function nearestWeekendIndex(weekStarts, todayISO) {
   return weekStarts.length - 1;
 }
 
+// True when the last covered Sunday is behind us: the file is from a run that
+// never got replaced, and no weekend in it is still ahead.
+function allWeekendsPast(weekStarts, todayISO) {
+  if (!weekStarts || !weekStarts.length) return false;
+  return sundayOf(weekStarts[weekStarts.length - 1]) < todayISO;
+}
+
+// What is still true once the data is past its last weekend: always-on places,
+// and runs that have not ended. Dated one-offs are gone.
+function showsWhenStale(ev, todayISO) {
+  if (ev.eventType === "recurring") return true;
+  if (ev.eventType === "run") return ev.endDate >= todayISO;
+  return false;
+}
+
 // Fallback when only recurring.json exists (before the first Action run).
 function nextSaturdays(fromISO, n) {
   var d = new Date(fromISO + "T12:00:00Z");
@@ -420,6 +435,12 @@ function visibleEvents() {
     return evs.filter(function (e) { return isFaved(e); });
   }
   var hoods = activeHoodList();
+  var today = todayNY();
+  if (allWeekendsPast(ws, today)) {
+    return evs.filter(function (e) {
+      return showsWhenStale(e, today) && matchesTab(e, state.tab) && passesHoods(e, hoods, state.wtt);
+    });
+  }
   return evs.filter(function (e) {
     return showsThisWeekend(e, sat, sun) && matchesTab(e, state.tab) && passesHoods(e, hoods, state.wtt);
   });
@@ -427,10 +448,10 @@ function visibleEvents() {
 
 function renderControls() {
   var ws = state.data.weekStartsCovered;
-  var nearest = nearestWeekendIndex(ws, todayNY());
+  var past = allWeekendsPast(ws, todayNY());
+  var nearest = past ? -1 : nearestWeekendIndex(ws, todayNY());
   document.getElementById("weekends").innerHTML = ws.map(function (sat, i) {
-    var label = i === nearest ? "This Weekend"
-      : fmtDay(fridayOf(sat)) + "–" + fmtDay(sundayOf(sat)).replace(/^[A-Za-z]+ /, "");
+    var label = i === nearest ? "This Weekend" : dayRange(fridayOf(sat), sundayOf(sat));
     return '<button class="wk' + (i === state.weekend ? " on" : "") + '" data-wk="' + i + '">' + label + '</button>';
   }).join("");
 
@@ -457,7 +478,9 @@ function renderCards() {
   if (!html) {
     html = '<div class="empty">' + (state.tab === "saved"
       ? "Nothing saved yet.<br>Tap ☆ on any event to build your shortlist."
-      : "Nothing matches these filters.<br>Try “All DC”, another tab, or another weekend.") + '</div>';
+      : allWeekendsPast(state.data.weekStartsCovered, todayNY())
+        ? "No current listings — the weekly refresh hasn't run.<br>Always-on places still show under “All”."
+        : "Nothing matches these filters.<br>Try “All DC”, another tab, or another weekend.") + '</div>';
   }
   document.getElementById("cards").innerHTML = html;
 }
@@ -465,9 +488,13 @@ function renderCards() {
 // The weekly Action has failed silently before (no commit landed on 2026-07-09
 // and the page looked exactly the same). If the data is older than a fortnight's
 // worth of refreshes, say so rather than presenting stale listings as current.
-function staleBannerText(generatedAt, todayISO) {
+function staleBannerText(generatedAt, todayISO, weekStarts) {
   if (!generatedAt) return null;
   var days = Math.floor((Date.parse(todayISO + "T12:00:00Z") - Date.parse(generatedAt)) / 86400000);
+  if (allWeekendsPast(weekStarts, todayISO)) {
+    return "Listings last updated " + fmtDay(generatedAt.slice(0, 10)) +
+      " — every weekend here has passed. Always-on places and shows still running are below";
+  }
   if (days < STALE_AFTER_DAYS) return null;
   return "Listings last updated " + fmtDay(generatedAt.slice(0, 10)) + " — the weekly refresh may have failed";
 }
@@ -549,7 +576,7 @@ function fetchJson(url) {
     state.data = data;
     state.weekend = nearestWeekendIndex(data.weekStartsCovered, todayNY());
     if (!wantSample) {
-      var stale = staleBannerText(data.generatedAt, todayNY());
+      var stale = staleBannerText(data.generatedAt, todayNY(), data.weekStartsCovered);
       if (stale) setBanner(stale);
     }
     var foot = [];

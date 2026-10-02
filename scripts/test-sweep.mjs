@@ -14,6 +14,7 @@ import {
   urlScore, normalizeNeighborhood, normalizeCategory, normalizeAge, TRACKS, TRACK_CONCURRENCY, REQUEST_TIMEOUT_MS,
   titleKey, hostnameOf, isAllowedHost, showsInWindow, dedupNear, titleOverlap,
   validateRecurringLayer, salvageObjects, searchErrorsIn, estimateCost, isWeekendDay, isNearDuplicate,
+  SEARCH_DOMAIN_FILTER, parseTrackList, usageLine, renderStepSummary,
   MODEL, WEB_SEARCH_TOOL, MAX_TOKENS, USE_STRUCTURED_OUTPUT, ALLOWED_URL_HOSTS
 } from "./sweep.mjs";
 
@@ -573,7 +574,8 @@ await scenario("s9", async () => {
   };
   const usage = { input: 0, output: 0, searches: 0 };
   await callModel({ system: "s", prompt: "p", apiKey: "k", fetchImpl: fake, log: quiet, searchDomains: ["930.com", "blackcatdc.com"], usage });
-  t("allowed_domains forwarded to web_search", JSON.stringify(sent.tools[0].allowed_domains) === '["930.com","blackcatdc.com"]');
+  t("search-domain filter is off until a live run proves it", SEARCH_DOMAIN_FILTER === false);
+  t("allowed_domains withheld while the filter is off", sent.tools[0].allowed_domains === undefined);
   t("usage accumulated across a track", usage.input === 10 && usage.output === 2 && usage.searches === 1);
 }
 
@@ -592,6 +594,108 @@ await scenario("s9", async () => {
   t("PROMPTS.md names the current search tool", md.includes("web_search_20260209"));
   t("system prompt states the Fri-Sun rule", /FRIDAY, SATURDAY and SUNDAY/.test(md));
 }
+
+// ---------------------------------------------------------------------------
+// (R1) a timed-out request is not retried; (R4) it is counted as attempted+aborted
+// ---------------------------------------------------------------------------
+{
+  let calls = 0;
+  const hanging = async (url, init) => {
+    calls++;
+    return new Promise((_, reject) => {
+      init.signal.addEventListener("abort", () => reject(Object.assign(new Error("aborted"), { name: "AbortError" })));
+    });
+  };
+  const usage = { input: 0, output: 0, searches: 0, attempted: 0, aborted: 0 };
+  let err = null;
+  // REQUEST_TIMEOUT_MS is 8 min; drive the timeout through a tiny timeoutMs by
+  // calling the exported path with a fetch that only resolves on abort.
+  try {
+    await callModel({ system: "s", prompt: "p", apiKey: "k", fetchImpl: hanging, log: quiet, retryDelayMs: 1, usage, timeoutMs: 30 });
+  } catch (e) { err = e; }
+  t("timeout surfaces as an error", !!err && /timed out/.test(err.message));
+  t("timeout is NOT retried", calls === 1);
+  t("timed-out request counted as attempted", usage.attempted === 1);
+  t("timed-out request counted as aborted", usage.aborted === 1);
+  t("REQUEST_TIMEOUT_MS is at least 8 minutes", REQUEST_TIMEOUT_MS >= 480000);
+  t("usage line names aborted requests", /1 of 1 requests aborted/.test(usageLine(usage)));
+  t("usage line is quiet when nothing aborted", !/aborted/.test(usageLine({ input: 1, output: 1, searches: 1, attempted: 1, aborted: 0 })));
+}
+
+// ---------------------------------------------------------------------------
+// (R5) track subsets and dry runs
+// ---------------------------------------------------------------------------
+t("parseTrackList accepts a list", JSON.stringify(parseTrackList("6, 2")) === "[6,2]");
+t("parseTrackList drops unknown numbers", JSON.stringify(parseTrackList("9 3")) === "[3]");
+t("parseTrackList empty -> null", parseTrackList("") === null && parseTrackList(undefined) === null);
+t("parseTrackList garbage -> null", parseTrackList("abc") === null);
+
+// --- scenario 12: SWEEP_TRACKS=6 runs one track, writes nothing, exits 0 -----
+await scenario("s12", async () => {
+  const existing = {
+    generatedAt: "2026-06-04T10:00:00Z", weekStartsCovered: [],
+    lastTheaterRefresh: "2026-06-04T10:00:00Z", // fresh — but an explicit selection overrides cadence
+    events: []
+  };
+  const dir = tmpRepo(existing);
+  const before = fs.readFileSync(path.join(dir, "events.json"), "utf8");
+  const model = cannedModel({ 6: [musicSingle] });
+  const logged = [];
+  const code = await main({ rootDir: dir, now: NOW, callModel: model, log: (m) => logged.push(String(m)), env: { SWEEP_TRACKS: "6" } });
+  t("s12 exit 0 despite being under the floor", code === 0);
+  t("s12 only track 6 ran", model.seen.length === 1 && model.seen[0].num === 6);
+  t("s12 events.json untouched", fs.readFileSync(path.join(dir, "events.json"), "utf8") === before);
+  t("s12 says it is a subset run", logged.some((l) => /SWEEP_TRACKS=6/.test(l)));
+  t("s12 reports the dry-run count", logged.some((l) => /DRY RUN — would have written/.test(l)));
+});
+
+// --- scenario 13: a subset run with a track error still fails ---------------
+await scenario("s13", async () => {
+  const dir = tmpRepo(null);
+  const model = async () => { throw new Error("boom"); };
+  const code = await main({ rootDir: dir, now: NOW, callModel: model, log: quiet, env: { SWEEP_TRACKS: "6" } });
+  t("s13 subset run with an error exits 1", code === 1);
+  t("s13 nothing written", !fs.existsSync(path.join(dir, "events.json")));
+});
+
+// --- scenario 14: SWEEP_DRY_RUN runs everything and writes nothing ----------
+await scenario("s14", async () => {
+  const dir = tmpRepo(null);
+  const filler = [];
+  for (let i = 0; i < 9; i++) filler.push(mk({ title: "Fete " + i, venue: "Plaza " + i, date: "2026-06-20", url: `https://wharfdc.com/f${i}` }));
+  const model = cannedModel({ 1: filler, 2: [], 3: [], 4: [], 5: [], 6: [], 7: [] });
+  const code = await main({ rootDir: dir, now: NOW, callModel: model, log: quiet, env: { SWEEP_DRY_RUN: "true" } });
+  t("s14 dry run exit 0", code === 0);
+  t("s14 all seven tracks ran", model.seen.length === 7);
+  t("s14 nothing written", !fs.existsSync(path.join(dir, "events.json")));
+});
+
+// --- scenario 15: step summary is written when GITHUB_STEP_SUMMARY is set ---
+await scenario("s15", async () => {
+  const dir = tmpRepo(null);
+  const summaryFile = path.join(dir, "summary.md");
+  const filler = [];
+  for (let i = 0; i < 9; i++) filler.push(mk({ title: "Fete " + i, venue: "Plaza " + i, date: "2026-06-20", url: `https://wharfdc.com/f${i}` }));
+  filler.push(mk({ title: "Sketchy", url: "https://spam.example.com/x" }));
+  const model = cannedModel({ 1: filler, 2: [], 3: [], 4: [], 5: [], 6: [], 7: [] });
+  const code = await main({ rootDir: dir, now: NOW, callModel: model, log: quiet, env: { GITHUB_STEP_SUMMARY: summaryFile } });
+  const md = fs.existsSync(summaryFile) ? fs.readFileSync(summaryFile, "utf8") : "";
+  t("s15 exit 0", code === 0);
+  t("s15 summary written", md.length > 0);
+  t("s15 summary names the outcome", /## Sweep — written/.test(md));
+  t("s15 summary lists the dropped host", /not allowlisted "spam\.example\.com"/.test(md));
+  t("s15 summary lists events", /Fete 0/.test(md));
+  t("s15 summary carries the cost line", /usage:/.test(md));
+});
+
+// --- scenario 16: a zero-event track says what the model said ---------------
+await scenario("s16", async () => {
+  const dir = tmpRepo(null);
+  const model = async () => "I could not find any events for those dates. []";
+  const logged = [];
+  await main({ rootDir: dir, now: NOW, callModel: model, log: (m) => logged.push(String(m)), env: {} });
+  t("s16 zero-event track logs the model text", logged.some((l) => /model returned no events; text begins: "I could not find/.test(l)));
+});
 
 // --- scenario 10: carried entries that fell out of the window are dropped ---
 await scenario("s10", async () => {

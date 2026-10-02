@@ -118,8 +118,8 @@ Things worth knowing:
 
 ## Good to know
 
-**The list refreshes every Thursday.** New events appear, past ones drop off. If
-you starred something, it stays starred.
+**The list refreshes every Thursday**, usually by the morning. New events appear,
+past ones drop off. If you starred something, it stays starred.
 
 **Double-check before you leave the house.** Every listing was real when it was
 found, but venues cancel things, sell out and change prices. Tap **↗ INFO** and
@@ -144,6 +144,12 @@ neighborhoods you know, or anything on **Worth the Trip**.
 may have failed."**
 The automatic update didn't run. What you're seeing is old but real. Tell whoever
 looks after the site.
+
+**"… every weekend here has passed. Always-on places and shows still running are
+below."**
+Same thing, but worse: the list is so old that none of its weekends are left.
+The page hides the dated events and keeps the places that are open every weekend
+and any shows still running. Definitely tell someone.
 
 **"Sample data — test fixture, not live listings."**
 You've got `?data=sample` on the end of the address. Those events are made up for

@@ -14,7 +14,15 @@ the data contract is [SCHEMA.md](SCHEMA.md).
 4. **Populate events.json:** Actions tab → "Refresh events" → Run workflow.
    Until that first run succeeds, the page automatically shows the always-on
    layer from `recurring.json`, so it's never blank. Review the first few runs
-   manually before trusting the Thursday schedule.
+   manually before trusting the Thursday schedule. The schedule is Thursday
+   05:17 UTC; GitHub can still delay it by hours.
+
+   **Test a change before Thursday:** Run workflow with `tracks` set to one track
+   number (e.g. `6`). That runs only that track, writes nothing, costs cents, and
+   shows what was found in the run's summary. `dry_run` runs everything and
+   writes nothing. Any change to the model, the search tool, or the prompts
+   should get one of these first — five scheduled runs failed in a row once
+   because one didn't.
 
 One standing caution: the repo is public and Pages serves its whole tree, so
 everything committed is world-readable — `recurring.json` included. Keep it to
