@@ -12,8 +12,19 @@ name: Refresh events
 
 on:
   schedule:
-    - cron: "0 10 * * 4" # Thursdays 10:00 UTC
-  workflow_dispatch: {} # manual runs from the Actions tab while verifying quality
+    # Thursdays 05:17 UTC. The old 10:00 slot fired 4–7 hours late every week —
+    # GitHub delays busy cron minutes — so this is a quieter one.
+    - cron: "17 5 * * 4"
+  workflow_dispatch:
+    inputs:
+      tracks:
+        description: "Only run these track numbers, e.g. '6' or '1,4'. Implies dry run."
+        required: false
+        default: ""
+      dry_run:
+        description: "Run everything but write and commit nothing"
+        type: boolean
+        default: false
 
 concurrency:
   group: refresh-events # a manual run won't overlap the scheduled one
@@ -22,7 +33,8 @@ concurrency:
 jobs:
   refresh:
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    # 7 tracks, 3 at a time, up to 8 min each: worst case ~24 min.
+    timeout-minutes: 30
     # Scoped on the job rather than the workflow, so the grant sits next to the
     # steps that use it. Actions are pinned to commit SHAs: a moving major tag
     # would run whatever it points at inside a job holding a writable token and
@@ -31,9 +43,9 @@ jobs:
       contents: write # to commit events.json
       issues: write # to report a failed run
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
 
-      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
         with:
           node-version: 22
 
@@ -46,12 +58,19 @@ jobs:
 
       # sweep.mjs has zero npm dependencies — no install step needed.
       # The key is passed only as an env var; it is never echoed or logged.
+      # Output is tee'd to a file so a failure can quote its last lines in the
+      # issue it files. pipefail keeps the step red when node exits non-zero.
       - name: Run sweep
         env:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
-        run: node scripts/sweep.mjs
+          SWEEP_TRACKS: ${{ github.event.inputs.tracks }}
+          SWEEP_DRY_RUN: ${{ github.event.inputs.dry_run }}
+        run: |
+          set -o pipefail
+          node scripts/sweep.mjs 2>&1 | tee sweep.log
 
       - name: Commit events.json if changed
+        if: github.event.inputs.dry_run != 'true' && github.event.inputs.tracks == ''
         run: |
           # --porcelain also catches the very first run, when events.json is new/untracked
           if [ -z "$(git status --porcelain -- events.json)" ]; then
@@ -64,21 +83,32 @@ jobs:
             git push
           fi
 
-      # A red run is only useful if somebody hears about it. One issue is reused
-      # for repeat failures so a broken week doesn't become a pile of issues.
+      # A red run is only useful if somebody hears about it. The issue is
+      # assigned to the repo owner — an assignment sends an email; an unassigned
+      # issue sat unseen for 29 days — and quotes the sweep's last lines so it
+      # says why. One issue is reused so a broken month isn't a pile of them.
+      # Manual dry runs don't file anything.
       - name: Report failure
-        if: failure()
+        if: failure() && github.event_name == 'schedule'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          OWNER: ${{ github.repository_owner }}
         run: |
           title="Weekly events refresh failed"
-          body="The scheduled refresh failed on $(date -u +%Y-%m-%d). The last good events.json is still published, so the page is showing older listings — it will flag itself as stale after 10 days.
+          tail_log=$(tail -n 15 sweep.log 2>/dev/null || echo "(no sweep output captured)")
+          body="The scheduled refresh failed on $(date -u +%Y-%m-%d). The last good events.json is still published, so the page is showing older listings — it flags itself as stale after 10 days.
+
+          Last lines of the sweep:
+          \`\`\`
+          $tail_log
+          \`\`\`
 
           Run log: $RUN_URL"
           existing=$(gh issue list --state open --search "$title in:title" --json number --jq '.[0].number')
           if [ -n "$existing" ]; then
             gh issue comment "$existing" --body "$body"
+            gh issue edit "$existing" --add-assignee "$OWNER" >/dev/null 2>&1 || true
           else
-            gh issue create --title "$title" --body "$body"
+            gh issue create --title "$title" --body "$body" --assignee "$OWNER"
           fi

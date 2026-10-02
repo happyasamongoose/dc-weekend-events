@@ -11,7 +11,7 @@ scheduled GitHub Action refreshes weekly. No server, no per-view compute, free h
   events-sample.json  hand-written test fixture; index.html is built against this first
   recurring.json      hardcoded passive layer (markets/parks/trails); hand-edited
 /.github/workflows/
-  refresh.yml         runs every Thursday 10:00 UTC + manual workflow_dispatch trigger
+  refresh.yml         runs every Thursday 05:17 UTC + manual trigger (inputs: tracks, dry_run)
   test.yml            both suites on every push and PR
 /scripts/
   sweep.mjs           Node script: calls Anthropic API, runs tracks, merges, writes events.json
@@ -149,7 +149,16 @@ single column, large tap targets, sticky weekend picker + tabs at top.
 - Safety: if non-recurring count < 8, or more than 2 tracks errored, keep the last good
   events.json, log a warning, exit non-zero (never publish an empty page). A failed run
   files an issue; the page flags itself stale after 10 days.
-- Log what the run cost: input/output tokens and web searches, at list rates.
+- Log what the run cost: input/output tokens and web searches, at list rates, plus
+  how many requests were attempted and how many timed out (those are billed too).
+- Write a step summary (found events, drop tally, cost) the Actions run page shows.
+- `SWEEP_TRACKS="6"` runs one track and writes nothing; `SWEEP_DRY_RUN=1` runs all
+  and writes nothing. The workflow exposes both as dispatch inputs.
+- A request is given 8 minutes. A timed-out request is not retried — the server
+  finishes and bills it regardless, and a second attempt only doubles the wait.
+- Tracks 5–7 carry `searchDomains`, but `SEARCH_DOMAIN_FILTER` is off until a
+  `tracks: 6` dispatch shows the filter finding events; the only live data point
+  so far was zero.
 - Write events.json with generatedAt, weekStartsCovered, lastTheaterRefresh.
 
 ## Setup checklist (do later, at your machine)

@@ -29,7 +29,11 @@ export const MIN_NONRECURRING = 8;          // (g) safety floor
 export const MAX_TRACK_ERRORS = 2;          // (g) abort if MORE than this errored
 export const RETRY_DELAY_MS = 20000;
 export const TRACK_CONCURRENCY = 3;       // tracks run in parallel, capped (rate-limit friendly)
-export const REQUEST_TIMEOUT_MS = 120000; // abort a single API request if it hangs (2 min)
+// A single web_search request on claude-sonnet-5 + web_search_20260209 runs two
+// minutes or more (the tool's dynamic filtering executes code under the hood).
+// The old 120s cap cut off every request for five straight Thursdays. 8 minutes,
+// and a timed-out request is NOT retried — that only doubled the wasted time.
+export const REQUEST_TIMEOUT_MS = 480000;
 
 // Cost reporting (list rates, USD). Used only for the per-run log line.
 export const PRICE_IN_PER_MTOK = 2.00;
@@ -41,6 +45,16 @@ export const PRICE_PER_1K_SEARCHES = 10.00;
 // against a live response that also carries server-side web_search blocks, and
 // a 400 here means a Thursday with no refresh. Flip after one manual dispatch.
 export const USE_STRUCTURED_OUTPUT = false;
+
+// (R2) Per-track allowed_domains for tracks 5–7 are kept on the track config but
+// OFF: the only live run that completed a filtered track (music, Oct 1) returned
+// zero events from 3,859 output tokens. Flip after a `tracks: 6` dispatch finds
+// events with it on. The url-host allowlist at validation stays on regardless.
+export const SEARCH_DOMAIN_FILTER = false;
+
+// (R4) Cost line counts what was attempted, not just what completed — an aborted
+// request is almost certainly finished and billed server-side.
+export const SWEEP_SUMMARY_MAX_ROWS = 60;
 
 // ---------------------------------------------------------------------------
 // Canonical lists — SCHEMA.md, exact strings
@@ -756,10 +770,11 @@ export function salvageObjects(text) {
 // ---------------------------------------------------------------------------
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
-async function postMessages(fetchImpl, apiKey, body, retryDelayMs, log, timeoutMs = REQUEST_TIMEOUT_MS) {
+async function postMessages(fetchImpl, apiKey, body, retryDelayMs, log, timeoutMs = REQUEST_TIMEOUT_MS, usage = null) {
   for (let attempt = 0; ; attempt++) {
     const ctrl = new AbortController();
     const timer = setTimeout(() => ctrl.abort(), timeoutMs);
+    if (usage) usage.attempted++;
     let res;
     try {
       res = await fetchImpl("https://api.anthropic.com/v1/messages", {
@@ -773,18 +788,14 @@ async function postMessages(fetchImpl, apiKey, body, retryDelayMs, log, timeoutM
         signal: ctrl.signal
       });
     } catch (e) {
-      // An aborted request surfaces as an AbortError; treat a timeout as a
-      // retryable failure on the first attempt, same as a 5xx/429.
-      if (ctrl.signal.aborted && attempt === 0) {
-        log(`  api request timed out after ${Math.round(timeoutMs / 1000)}s; retrying`);
-        clearTimeout(timer);
-        await sleep(retryDelayMs);
-        continue;
-      }
       clearTimeout(timer);
-      throw ctrl.signal.aborted
-        ? new Error(`Anthropic API request timed out after ${timeoutMs}ms`)
-        : e;
+      if (ctrl.signal.aborted) {
+        // (R1) Not retried: the server almost certainly finishes (and bills) the
+        // request anyway, and a second identical attempt just doubles the wait.
+        if (usage) usage.aborted++;
+        throw new Error(`Anthropic API request timed out after ${Math.round(timeoutMs / 1000)}s (not retried)`);
+      }
+      throw e;
     } finally {
       clearTimeout(timer);
     }
@@ -860,13 +871,13 @@ export function searchErrorsIn(content) {
   return codes;
 }
 
-export async function callModel({ system, prompt, apiKey, fetchImpl = fetch, log = console.log, retryDelayMs = RETRY_DELAY_MS, searchDomains = null, usage = null }) {
+export async function callModel({ system, prompt, apiKey, fetchImpl = fetch, log = console.log, retryDelayMs = RETRY_DELAY_MS, searchDomains = null, usage = null, timeoutMs = REQUEST_TIMEOUT_MS }) {
   const messages = [{ role: "user", content: prompt }];
   const searchTool = {
     type: WEB_SEARCH_TOOL, name: "web_search", max_uses: MAX_SEARCHES_PER_TRACK
   };
   // (S1) tracks that read named venue calendars are capped to those domains.
-  if (searchDomains && searchDomains.length) searchTool.allowed_domains = searchDomains;
+  if (SEARCH_DOMAIN_FILTER && searchDomains && searchDomains.length) searchTool.allowed_domains = searchDomains;
 
   const body = {
     model: MODEL,
@@ -879,7 +890,7 @@ export async function callModel({ system, prompt, apiKey, fetchImpl = fetch, log
     body.output_config = { format: { type: "json_schema", schema: EVENT_ARRAY_SCHEMA } };
   }
   for (let turn = 0; turn <= MAX_CONTINUES; turn++) {
-    const resp = await postMessages(fetchImpl, apiKey, body, retryDelayMs, log);
+    const resp = await postMessages(fetchImpl, apiKey, body, retryDelayMs, log, timeoutMs, usage);
 
     const failed = searchErrorsIn(resp.content);
     if (failed.length) log(`  web_search errors: ${failed.join(", ")}`);
@@ -963,7 +974,16 @@ export async function main(opts = {}) {
   // (d) cadence — decided here, in ONE workflow
   const lastTheater = existing && existing.lastTheaterRefresh ? Date.parse(existing.lastTheaterRefresh) : NaN;
   const theaterDue = isNaN(lastTheater) || (now.getTime() - lastTheater) > THEATER_STALE_DAYS * 86400000;
-  const tracksToRun = TRACKS.filter((t) => t.weekly || theaterDue);
+  // (R5) SWEEP_TRACKS="6" runs only the listed tracks; SWEEP_DRY_RUN=1 writes
+  // nothing. A subset can never be a complete file, so it implies dry run and
+  // the safety floor is reported rather than enforced; track errors still fail.
+  const onlyTracks = parseTrackList(env.SWEEP_TRACKS);
+  const dryRun = isTruthy(env.SWEEP_DRY_RUN) || onlyTracks !== null;
+  const tracksToRun = onlyTracks
+    ? TRACKS.filter((t) => onlyTracks.includes(t.num))
+    : TRACKS.filter((t) => t.weekly || theaterDue);
+  if (onlyTracks) log(`[sweep] SWEEP_TRACKS=${onlyTracks.join(",")} — subset run, nothing will be written`);
+  else if (dryRun) log("[sweep] SWEEP_DRY_RUN — full run, nothing will be written");
 
   log(`[sweep] ${now.toISOString()} window ${window.firstFri}..${window.lastSun} (Fri–Sun weekends)`);
   log(`[sweep] theater refresh ${theaterDue ? "DUE — running tracks 5-7" : "fresh — skipping tracks 5-7, carrying entries forward"}`);
@@ -982,7 +1002,7 @@ export async function main(opts = {}) {
   let trackErrors = 0;
   const found = [];
   const dropTally = new Map();
-  const usage = { input: 0, output: 0, searches: 0 };
+  const usage = { input: 0, output: 0, searches: 0, attempted: 0, aborted: 0 };
 
   // Run one track in isolation; returns its own results without mutating
   // shared state, so concurrent tracks never race on found/dropTally.
@@ -997,6 +1017,11 @@ export async function main(opts = {}) {
         searchDomains: track.searchDomains || null, usage
       });
       const raw = parseEventArray(text);
+      if (!raw.length) {
+        // (R2) a zero-event track used to be indistinguishable from a working one
+        const head = String(text).replace(/\s+/g, " ").trim().slice(0, 300);
+        log(`[track ${track.num}] model returned no events; text begins: ${JSON.stringify(head)}`);
+      }
       let kept = 0;
       for (const r of raw) {
         const v = validateAndNormalize(r, window);
@@ -1057,12 +1082,25 @@ export async function main(opts = {}) {
 
   // (g) safety fallback — never publish a gutted file
   const nonRecurring = merged.filter((e) => !e.recurring).length;
-  if (nonRecurring < MIN_NONRECURRING || trackErrors > MAX_TRACK_ERRORS) {
+  const floorMissed = nonRecurring < MIN_NONRECURRING;
+  const tooManyErrors = trackErrors > MAX_TRACK_ERRORS;
+  const summary = { window, tracksRun: tracksToRun.map((t) => t.num), trackErrors, nonRecurring, merged, dropTally, lowDropped, usage, dryRun, onlyTracks };
+
+  if (onlyTracks ? tooManyErrors || trackErrors > 0 : (floorMissed || tooManyErrors)) {
     log(`WARNING: SAFETY ABORT — nonRecurring=${nonRecurring} (min ${MIN_NONRECURRING}), trackErrors=${trackErrors} (max ${MAX_TRACK_ERRORS}).`);
-    log(`[sweep] usage before abort: ${usage.input} in + ${usage.output} out tokens, ` +
-        `${usage.searches} searches ≈ $${estimateCost(usage).toFixed(2)} at list rates`);
+    log(`[sweep] ${usageLine(usage)}`);
     log("WARNING: keeping the existing events.json untouched; exiting non-zero.");
+    writeStepSummary(env, { ...summary, outcome: "SAFETY ABORT" }, log);
     return 1;
+  }
+  if (onlyTracks && floorMissed) {
+    log(`[sweep] subset run found ${nonRecurring} events — below the ${MIN_NONRECURRING} floor a full run needs, which is expected for a subset`);
+  }
+  if (dryRun) {
+    log(`[sweep] DRY RUN — would have written ${merged.length} events (${nonRecurring} searched/carried + ${merged.length - nonRecurring} recurring)`);
+    log(`[sweep] ${usageLine(usage)}`);
+    writeStepSummary(env, { ...summary, outcome: "DRY RUN (nothing written)" }, log);
+    return 0;
   }
 
   // (h) write
@@ -1076,9 +1114,66 @@ export async function main(opts = {}) {
   fs.writeFileSync(tmp, JSON.stringify(outFile, null, 2) + "\n");
   fs.renameSync(tmp, eventsPath);
   log(`[sweep] wrote events.json: ${merged.length} events (${nonRecurring} searched/carried + ${merged.length - nonRecurring} recurring), ${trackErrors} track errors`);
-  log(`[sweep] usage: ${usage.input} in + ${usage.output} out tokens, ${usage.searches} searches ` +
-      `≈ $${estimateCost(usage).toFixed(2)} at list rates`);
+  log(`[sweep] ${usageLine(usage)}`);
+  writeStepSummary(env, { ...summary, outcome: "written" }, log);
   return 0;
+}
+
+export function usageLine(usage) {
+  const aborted = usage.aborted ? `, ${usage.aborted} of ${usage.attempted} requests aborted (likely still billed)` : "";
+  return `usage: ${usage.input} in + ${usage.output} out tokens, ${usage.searches} searches ` +
+         `≈ $${estimateCost(usage).toFixed(2)} at list rates for completed requests${aborted}`;
+}
+
+export function parseTrackList(v) {
+  if (v == null || String(v).trim() === "") return null;
+  const nums = String(v).split(/[,\s]+/).map((x) => parseInt(x, 10)).filter((n) => TRACKS.some((t) => t.num === n));
+  return nums.length ? [...new Set(nums)] : null;
+}
+
+const isTruthy = (v) => /^(1|true|yes|on)$/i.test(String(v == null ? "" : v).trim());
+
+/**
+ * (R9) A run's findings, as a markdown table the Actions UI shows on the run
+ * page — so a dropped host or an empty track is visible without opening the log.
+ */
+export function renderStepSummary(r) {
+  const lines = [];
+  lines.push(`## Sweep — ${r.outcome}`);
+  lines.push("");
+  lines.push(`Window ${r.window.firstFri} → ${r.window.lastSun} · tracks ${r.tracksRun.join(", ")} · ` +
+             `${r.trackErrors} track error(s) · ${r.nonRecurring} searched/carried + ` +
+             `${r.merged.length - r.nonRecurring} recurring`);
+  lines.push("");
+  lines.push(`${usageLine(r.usage)}`);
+  if (r.dropTally && r.dropTally.size) {
+    lines.push("");
+    lines.push("### Validation drops");
+    lines.push("| count | reason |");
+    lines.push("|---|---|");
+    for (const [reason, n] of [...r.dropTally].sort((a, b) => b[1] - a[1])) lines.push(`| ${n} | ${reason.replace(/\|/g, "\\|")} |`);
+  }
+  if (r.lowDropped) lines.push(`\n${r.lowDropped} low-confidence entries dropped`);
+  const found = r.merged.filter((e) => !e.recurring);
+  if (found.length) {
+    lines.push("");
+    lines.push(`### Events (${found.length})`);
+    lines.push("| when | title | venue | host |");
+    lines.push("|---|---|---|---|");
+    for (const e of found.slice(0, SWEEP_SUMMARY_MAX_ROWS)) {
+      const when = e.eventType === "single" ? e.date : `${e.startDate} → ${e.endDate}`;
+      lines.push(`| ${when} | ${e.title.replace(/\|/g, "\\|")} | ${e.venue.replace(/\|/g, "\\|")} | ${e.source} |`);
+    }
+    if (found.length > SWEEP_SUMMARY_MAX_ROWS) lines.push(`| … | ${found.length - SWEEP_SUMMARY_MAX_ROWS} more | | |`);
+  }
+  return lines.join("\n") + "\n";
+}
+
+function writeStepSummary(env, r, log) {
+  const file = env.GITHUB_STEP_SUMMARY;
+  if (!file) return;
+  try { fs.appendFileSync(file, renderStepSummary(r)); }
+  catch (e) { log(`WARNING: could not write step summary: ${e.message}`); }
 }
 
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {

@@ -22,7 +22,8 @@ const L = new Function(block[1] + `
   return { matchesTab, showsThisWeekend, passesHoods, sundayOf, fridayOf, addDaysISO,
            addOneDay, gcalUrl, nearestWeekendIndex, nextSaturdays, orderForDisplay,
            titleFingerprint, favFingerprint, rebaseSample, esc, fmtDay, whenText,
-           dayRange, CATEGORIES, CHIP_LABEL, CORE_HOODS, ALL_DC_HOODS };`)();
+           dayRange, allWeekendsPast, showsWhenStale,
+           CATEGORIES, CHIP_LABEL, CORE_HOODS, ALL_DC_HOODS };`)();
 
 let n = 0; const fails = [];
 const t = (name, cond) => { n++; if (!cond) fails.push(name); };
@@ -151,6 +152,21 @@ t("fingerprint includes the neighborhood", L.favFingerprint({ title: "Jazz Night
     new Date(out.events.filter((x) => x.date)[i].date + "T12:00:00Z").getUTCDay()));
   t("rebase is a no-op when already current", L.rebaseSample(out, "2026-08-28").weekStartsCovered[0] === "2026-08-29");
   t("rebase tolerates an empty fixture", L.rebaseSample({ weekStartsCovered: [], events: [] }, "2026-08-28").events.length === 0);
+}
+
+// ---------------------------------------------------------------------------
+// past the end of the data — the state the site has been in since Oct 5
+// ---------------------------------------------------------------------------
+{
+  const ws = ["2026-08-29", "2026-09-05", "2026-09-12", "2026-09-19", "2026-09-26", "2026-10-03"];
+  t("not past while the last Sunday is today", !L.allWeekendsPast(ws, "2026-10-04"));
+  t("past the day after the last Sunday", L.allWeekendsPast(ws, "2026-10-05"));
+  t("not past mid-window", !L.allWeekendsPast(ws, "2026-09-10"));
+  t("empty list is never past", !L.allWeekendsPast([], "2026-10-05"));
+  t("stale view keeps recurring", L.showsWhenStale({ eventType: "recurring" }, "2026-10-05"));
+  t("stale view keeps a run still going", L.showsWhenStale(run("2026-09-10", "2026-11-01"), "2026-10-05"));
+  t("stale view drops an ended run", !L.showsWhenStale(run("2026-09-10", "2026-10-04"), "2026-10-05"));
+  t("stale view drops every dated single", !L.showsWhenStale(single("2026-10-03"), "2026-10-05"));
 }
 
 // ---------------------------------------------------------------------------
