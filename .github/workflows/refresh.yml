@@ -83,6 +83,18 @@ jobs:
             git push
           fi
 
+      # A green scheduled run closes the failure issue, so it tracks live state.
+      - name: Close failure issue
+        if: success() && github.event_name == 'schedule'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          existing=$(gh issue list --state open --search "Weekly events refresh failed in:title" --json number --jq '.[0].number')
+          if [ -n "$existing" ]; then
+            gh issue close "$existing" --comment "The scheduled refresh succeeded on $(date -u +%Y-%m-%d): $RUN_URL"
+          fi
+
       # A red run is only useful if somebody hears about it. The issue is
       # assigned to the repo owner — an assignment sends an email; an unassigned
       # issue sat unseen for 29 days — and quotes the sweep's last lines so it

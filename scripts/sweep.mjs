@@ -97,7 +97,8 @@ export const ALLOWED_URL_HOSTS = [
   "dclibrary.org", "dclibrary.libnet.info", "nps.gov", "si.edu", "usbg.gov", "loc.gov",
   "kennedy-center.org", "nationalgeographic.org", "smithsonianmag.com",
   // waterfront / festival / market
-  "wharfdc.com", "capitolriverfront.org", "eventsdc.com", "rfkfields.com",
+  "wharfdc.com", "capitolriverfront.org", "navyyarddc.org", "downtowndc.org",
+  "capitolhillporchfest.com", "eventsdc.com", "rfkfields.com",
   "easternmarket-dc.org", "easternmarketmainstreet.org", "dcstatefair.org",
   "dcjazzfest.org", "thehotelwashington.com", "trolleytours.com", "chaw.org",
   // biking
@@ -115,7 +116,7 @@ export const ALLOWED_URL_HOSTS = [
   "dcimprov.com", "drafthousecomedy.com", "dccomedyloft.com", "witdc.org",
   "arlingtondrafthouse.com",
   // ticketing that venues actually delegate to
-  "eventbrite.com", "opendate.io", "ticketmaster.com", "axs.com", "etix.com",
+  "eventbrite.com", "opendate.io", "ticketmaster.com", "livenation.com", "axs.com", "etix.com",
   "ticketweb.com", "tickets.com", "seetickets.us", "todaytix.com"
 ];
 
