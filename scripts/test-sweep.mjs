@@ -15,7 +15,7 @@ import {
   urlScore, normalizeNeighborhood, normalizeCategory, normalizeAge, TRACKS, TRACK_CONCURRENCY, REQUEST_TIMEOUT_MS,
   titleKey, hostnameOf, isAllowedHost, showsInWindow, dedupNear, titleOverlap,
   validateRecurringLayer, salvageObjects, searchErrorsIn, estimateCost, isWeekendDay, isNearDuplicate,
-  SEARCH_DOMAIN_FILTER, parseTrackList, usageLine, renderStepSummary, nodeFetch,
+  SEARCH_DOMAIN_FILTER, parseTrackList, usageLine, renderStepSummary, nodeFetch, searchQueriesIn,
   MODEL, WEB_SEARCH_TOOL, MAX_TOKENS, USE_STRUCTURED_OUTPUT, ALLOWED_URL_HOSTS
 } from "./sweep.mjs";
 
@@ -562,6 +562,12 @@ await scenario("s9", async () => {
   t("search error block detected", JSON.stringify(searchErrorsIn([{ type: "web_search_tool_result", content: { error_code: "max_uses_exceeded" } }])) === '["max_uses_exceeded"]');
   t("successful search not flagged", searchErrorsIn([{ type: "web_search_tool_result", content: [{ type: "web_search_result" }] }]).length === 0);
   t("no blocks, no errors", searchErrorsIn(undefined).length === 0);
+  t("search queries extracted", JSON.stringify(searchQueriesIn([
+    { type: "server_tool_use", name: "web_search", input: { query: "ma.to events washington" } },
+    { type: "text", text: "x" },
+    { type: "server_tool_use", name: "web_search", input: { query: "dcist this weekend" } }
+  ])) === '["ma.to events washington","dcist this weekend"]');
+  t("search queries ignore other blocks", searchQueriesIn([{ type: "text", text: "[]" }]).length === 0);
 
   const cost = estimateCost({ input: 1e6, output: 1e6, searches: 1000 });
   t("cost = in + out + searches", Math.abs(cost - (2 + 10 + 10)) < 1e-9);
