@@ -929,6 +929,17 @@ export function searchErrorsIn(content) {
   return codes;
 }
 
+/** The queries the model issued, so a run shows which sources it actually consulted. */
+export function searchQueriesIn(content) {
+  const out = [];
+  for (const block of content || []) {
+    if (block && block.type === "server_tool_use" && block.name === "web_search" && block.input && block.input.query) {
+      out.push(String(block.input.query));
+    }
+  }
+  return out;
+}
+
 export async function callModel({ system, prompt, apiKey, fetchImpl = nodeFetch, log = console.log, retryDelayMs = RETRY_DELAY_MS, searchDomains = null, usage = null, timeoutMs = REQUEST_TIMEOUT_MS }) {
   const messages = [{ role: "user", content: prompt }];
   const searchTool = {
@@ -952,6 +963,8 @@ export async function callModel({ system, prompt, apiKey, fetchImpl = nodeFetch,
 
     const failed = searchErrorsIn(resp.content);
     if (failed.length) log(`  web_search errors: ${failed.join(", ")}`);
+    const queries = searchQueriesIn(resp.content);
+    if (queries.length) log(`  searched: ${queries.map((q) => JSON.stringify(q)).join(" | ")}`);
 
     if (resp.stop_reason === "pause_turn") {
       messages.push({ role: "assistant", content: resp.content });
