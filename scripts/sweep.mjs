@@ -115,6 +115,9 @@ export const ALLOWED_URL_HOSTS = [
   // comedy
   "dcimprov.com", "drafthousecomedy.com", "dccomedyloft.com", "witdc.org",
   "arlingtondrafthouse.com",
+  // listings aggregators — accepted as a link of last resort; an organizer's own
+  // page outranks them in dedup (AGGREGATOR_DOMAINS)
+  "ma.to",
   // ticketing that venues actually delegate to
   "eventbrite.com", "opendate.io", "ticketmaster.com", "livenation.com", "axs.com", "etix.com",
   "ticketweb.com", "tickets.com", "seetickets.us", "todaytix.com"
@@ -125,7 +128,7 @@ const AGGREGATOR_DOMAINS = [
   "eventbrite.com", "ticketmaster.com", "livenation.com", "songkick.com",
   "bandsintown.com", "dice.fm", "axs.com", "seatgeek.com", "stubhub.com",
   "vividseats.com", "ticketweb.com", "etix.com", "allevents.in", "everout.com",
-  "dcist.com", "washingtonian.com", "washingtoncitypaper.com", "timeout.com",
+  "dcist.com", "washingtonian.com", "washingtoncitypaper.com", "timeout.com", "ma.to",
   "thrillist.com", "patch.com", "citycast.fm", "thehillishome.com", "popville.com"
 ];
 
@@ -185,6 +188,8 @@ export const TRACKS = [
 Capitol Hill, Southwest/The Wharf, Navy Yard/Ballpark, and Downtown/National Mall.
 Prioritize these curated local sources and their "this weekend" / "to do list" posts:
 - The Hill is Home (thehillishome.com) — its weekly "The To Do List" post
+- ma.to — its Washington events listing (ma.to/events/washington/today and the
+  weekend and by-date pages); follow each entry through to the organizer's page
 - DCist (dcist.com)
 - Washingtonian (washingtonian.com) things-to-do
 - City Cast DC (dc.citycast.fm)

@@ -84,6 +84,8 @@ Find events on the Fri/Sat/Sun weekends starting {WEEKEND_LIST} in Washington DC
 Capitol Hill, Southwest/The Wharf, Navy Yard/Ballpark, and Downtown/National Mall.
 Prioritize these curated local sources and their "this weekend" / "to do list" posts:
 - The Hill is Home (thehillishome.com) — its weekly "The To Do List" post
+- ma.to — its Washington events listing (ma.to/events/washington/today and the
+  weekend and by-date pages); follow each entry through to the organizer's page
 - DCist (dcist.com)
 - Washingtonian (washingtonian.com) things-to-do
 - City Cast DC (dc.citycast.fm)
