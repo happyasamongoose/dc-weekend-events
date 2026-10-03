@@ -15,7 +15,7 @@ import {
   urlScore, normalizeNeighborhood, normalizeCategory, normalizeAge, TRACKS, TRACK_CONCURRENCY, REQUEST_TIMEOUT_MS,
   titleKey, hostnameOf, isAllowedHost, showsInWindow, dedupNear, titleOverlap,
   validateRecurringLayer, salvageObjects, searchErrorsIn, estimateCost, isWeekendDay, isNearDuplicate,
-  SEARCH_DOMAIN_FILTER, parseTrackList, usageLine, renderStepSummary, nodeFetch,
+  SEARCH_DOMAIN_FILTER, parseTrackList, usageLine, renderStepSummary, nodeFetch, searchQueriesIn,
   MODEL, WEB_SEARCH_TOOL, MAX_TOKENS, USE_STRUCTURED_OUTPUT, ALLOWED_URL_HOSTS
 } from "./sweep.mjs";
 
@@ -84,6 +84,11 @@ t("allowlist rejects a lookalike suffix", !isAllowedHost("https://not-930.com/x"
 t("allowlist rejects garbage", !isAllowedHost("javascript:alert(1)"));
 t("allowlist is non-trivial", ALLOWED_URL_HOSTS.length > 30);
 t("allowlist knows Union Stage's real domain", isAllowedHost("https://www.unionstagepresents.com/shows/x"));
+t("allowlist accepts ma.to listings", isAllowedHost("https://ma.to/events/washington/today"));
+t("ma.to ranks as an aggregator in dedup", urlScore("https://ma.to/e/123") === 0 && urlScore("https://www.arenastage.org/x") === 1);
+t("roundups track searches ma.to", /ma\.to\/events\/washington/.test(TRACKS.find((x) => x.num === 1).prompt));
+t("roundups track makes the ma.to search mandatory and first", /FIRST search must be a site:ma\.to/.test(TRACKS.find((x) => x.num === 1).prompt));
+t("roundups track gets an extra search for it", TRACKS.find((x) => x.num === 1).maxSearches === 8);
 t("max_tokens leaves room for a full music track", MAX_TOKENS >= 32000);
 
 // ---------------------------------------------------------------------------
@@ -559,6 +564,12 @@ await scenario("s9", async () => {
   t("search error block detected", JSON.stringify(searchErrorsIn([{ type: "web_search_tool_result", content: { error_code: "max_uses_exceeded" } }])) === '["max_uses_exceeded"]');
   t("successful search not flagged", searchErrorsIn([{ type: "web_search_tool_result", content: [{ type: "web_search_result" }] }]).length === 0);
   t("no blocks, no errors", searchErrorsIn(undefined).length === 0);
+  t("search queries extracted", JSON.stringify(searchQueriesIn([
+    { type: "server_tool_use", name: "web_search", input: { query: "ma.to events washington" } },
+    { type: "text", text: "x" },
+    { type: "server_tool_use", name: "web_search", input: { query: "dcist this weekend" } }
+  ])) === '["ma.to events washington","dcist this weekend"]');
+  t("search queries ignore other blocks", searchQueriesIn([{ type: "text", text: "[]" }]).length === 0);
 
   const cost = estimateCost({ input: 1e6, output: 1e6, searches: 1000 });
   t("cost = in + out + searches", Math.abs(cost - (2 + 10 + 10)) < 1e-9);
@@ -580,6 +591,10 @@ await scenario("s9", async () => {
   t("search-domain filter is off until a live run proves it", SEARCH_DOMAIN_FILTER === false);
   t("allowed_domains withheld while the filter is off", sent.tools[0].allowed_domains === undefined);
   t("usage accumulated across a track", usage.input === 10 && usage.output === 2 && usage.searches === 1);
+  await callModel({ system: "s", prompt: "p", apiKey: "k", fetchImpl: fake, log: quiet, maxSearches: 8 });
+  t("per-track max_uses reaches the API", sent.tools[0].max_uses === 8);
+  await callModel({ system: "s", prompt: "p", apiKey: "k", fetchImpl: fake, log: quiet });
+  t("default max_uses otherwise", sent.tools[0].max_uses === 6);
 }
 
 // ---------------------------------------------------------------------------

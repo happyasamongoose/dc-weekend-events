@@ -94,7 +94,7 @@ export const THEATER_TRACK_CATEGORIES = ["theater", "music", "comedy"]; // track
 export const ALLOWED_URL_HOSTS = [
   // roundups / civic / city
   "washington.org", "dc.gov", "250.dc.gov", "dpr.dc.gov", "ddot.dc.gov", "events.dc.gov",
-  "dclibrary.org", "dclibrary.libnet.info", "nps.gov", "si.edu", "usbg.gov", "loc.gov",
+  "dclibrary.org", "dclibrary.libnet.info", "nps.gov", "si.edu", "usbg.gov", "loc.gov", "nbm.org",
   "kennedy-center.org", "nationalgeographic.org", "smithsonianmag.com",
   // waterfront / festival / market
   "wharfdc.com", "capitolriverfront.org", "navyyarddc.org", "downtowndc.org",
@@ -115,6 +115,9 @@ export const ALLOWED_URL_HOSTS = [
   // comedy
   "dcimprov.com", "drafthousecomedy.com", "dccomedyloft.com", "witdc.org",
   "arlingtondrafthouse.com",
+  // listings aggregators — accepted as a link of last resort; an organizer's own
+  // page outranks them in dedup (AGGREGATOR_DOMAINS)
+  "ma.to",
   // ticketing that venues actually delegate to
   "eventbrite.com", "opendate.io", "ticketmaster.com", "livenation.com", "axs.com", "etix.com",
   "ticketweb.com", "tickets.com", "seetickets.us", "todaytix.com"
@@ -125,7 +128,7 @@ const AGGREGATOR_DOMAINS = [
   "eventbrite.com", "ticketmaster.com", "livenation.com", "songkick.com",
   "bandsintown.com", "dice.fm", "axs.com", "seatgeek.com", "stubhub.com",
   "vividseats.com", "ticketweb.com", "etix.com", "allevents.in", "everout.com",
-  "dcist.com", "washingtonian.com", "washingtoncitypaper.com", "timeout.com",
+  "dcist.com", "washingtonian.com", "washingtoncitypaper.com", "timeout.com", "ma.to",
   "thrillist.com", "patch.com", "citycast.fm", "thehillishome.com", "popville.com"
 ];
 
@@ -181,14 +184,20 @@ Set "recurring": false for everything you search.`;
 export const TRACKS = [
   {
     num: 1, name: "roundups", weekly: true,
+    maxSearches: 8, // one is reserved for ma.to; the other sources keep their six
     prompt: `Find events on the Fri/Sat/Sun weekends starting {WEEKEND_LIST} in Washington DC, focusing on
 Capitol Hill, Southwest/The Wharf, Navy Yard/Ballpark, and Downtown/National Mall.
 Prioritize these curated local sources and their "this weekend" / "to do list" posts:
 - The Hill is Home (thehillishome.com) — its weekly "The To Do List" post
+- ma.to — its Washington events listing (ma.to/events/washington/today and the
+  weekend and by-date pages); follow each entry through to the organizer's page
 - DCist (dcist.com)
 - Washingtonian (washingtonian.com) things-to-do
 - City Cast DC (dc.citycast.fm)
-Capture festivals, street events, neighborhood happenings, markets, and one-offs.`
+Capture festivals, street events, neighborhood happenings, markets, and one-offs.
+Your FIRST search must be a site:ma.to query for these weekend dates (for example
+"site:ma.to washington events {WEEKEND_LIST}") and you must read what it returns before
+searching anything else; then use the remaining searches on the other sources.`
   },
   {
     num: 2, name: "library-free-teen", weekly: true,
@@ -924,10 +933,21 @@ export function searchErrorsIn(content) {
   return codes;
 }
 
-export async function callModel({ system, prompt, apiKey, fetchImpl = nodeFetch, log = console.log, retryDelayMs = RETRY_DELAY_MS, searchDomains = null, usage = null, timeoutMs = REQUEST_TIMEOUT_MS }) {
+/** The queries the model issued, so a run shows which sources it actually consulted. */
+export function searchQueriesIn(content) {
+  const out = [];
+  for (const block of content || []) {
+    if (block && block.type === "server_tool_use" && block.name === "web_search" && block.input && block.input.query) {
+      out.push(String(block.input.query));
+    }
+  }
+  return out;
+}
+
+export async function callModel({ system, prompt, apiKey, fetchImpl = nodeFetch, log = console.log, retryDelayMs = RETRY_DELAY_MS, searchDomains = null, usage = null, timeoutMs = REQUEST_TIMEOUT_MS, maxSearches = null }) {
   const messages = [{ role: "user", content: prompt }];
   const searchTool = {
-    type: WEB_SEARCH_TOOL, name: "web_search", max_uses: MAX_SEARCHES_PER_TRACK
+    type: WEB_SEARCH_TOOL, name: "web_search", max_uses: maxSearches || MAX_SEARCHES_PER_TRACK
   };
   // (S1) tracks that read named venue calendars are capped to those domains.
   if (SEARCH_DOMAIN_FILTER && searchDomains && searchDomains.length) searchTool.allowed_domains = searchDomains;
@@ -947,6 +967,8 @@ export async function callModel({ system, prompt, apiKey, fetchImpl = nodeFetch,
 
     const failed = searchErrorsIn(resp.content);
     if (failed.length) log(`  web_search errors: ${failed.join(", ")}`);
+    const queries = searchQueriesIn(resp.content);
+    if (queries.length) log(`  searched: ${queries.map((q) => JSON.stringify(q)).join(" | ")}`);
 
     if (resp.stop_reason === "pause_turn") {
       messages.push({ role: "assistant", content: resp.content });
@@ -1067,7 +1089,8 @@ export async function main(opts = {}) {
       log(`[track ${track.num} ${track.name}] weekends: ${weekendList}`);
       const text = await call({
         system: SYSTEM_PROMPT, prompt, apiKey, log,
-        searchDomains: track.searchDomains || null, usage
+        searchDomains: track.searchDomains || null, usage,
+        maxSearches: track.maxSearches || null
       });
       const raw = parseEventArray(text);
       if (!raw.length) {
