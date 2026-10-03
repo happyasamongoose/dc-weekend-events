@@ -39,7 +39,7 @@ Search depth tapers: tracks 1–4 search deeply only for the next 3 weekends; we
 ## Family page — required features (in priority order)
 
 ### 1. Add to Google Calendar (highest value, pure client-side)
-Each card has a button building this URL and opening it in a new tab:
+Each card has a plain link (not `window.open` — a link is never caught by a phone's pop-up blocker) built from this URL, opening in a new tab:
 ```js
 function gcalUrl(ev, weekendSat, weekendSun) {
   // Pick the date: single -> ev.date; recurring -> the selected Saturday;

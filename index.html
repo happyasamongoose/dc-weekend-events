@@ -402,6 +402,9 @@ function badgesHtml(ev) {
 }
 
 function cardHtml(ev) {
+  // Calendar is a plain link, not window.open: a link is never caught by a
+  // phone browser's pop-up blocker, and it works with long-press / open-in-new-tab.
+  var wkSat = state.data.weekStartsCovered[state.weekend];
   // The category picks a CSS class, and only from the known list — it is never
   // interpolated into a style attribute, where a stray quote would escape it.
   var catClass = CHIP_LABEL[ev.category] ? " cat-" + ev.category : "";
@@ -420,7 +423,7 @@ function cardHtml(ev) {
       '<span class="price">' + esc(ev.price || "") + '</span>' +
       '<div class="acts">' +
         '<button class="star' + (faved ? " faved" : "") + '" data-act="fav" aria-pressed="' + faved + '" aria-label="Save ' + esc(ev.title) + '">' + (faved ? "★" : "☆") + '</button>' +
-        '<button class="btn" data-act="cal" aria-label="Add ' + esc(ev.title) + ' to Google Calendar">+ Cal</button>' +
+        '<a class="btn" href="' + esc(gcalUrl(ev, wkSat, sundayOf(wkSat))) + '" target="_blank" rel="noopener" aria-label="Add ' + esc(ev.title) + ' to Google Calendar">+ Cal</a>' +
         '<a class="btn" href="' + esc(safeUrl) + '" target="_blank" rel="noopener">↗ Info</a>' +
       '</div>' +
     '</div>' +
@@ -527,10 +530,6 @@ document.getElementById("cards").addEventListener("click", function (e) {
   var ev = state.data.events.find(function (x) { return x.id === card.dataset.id; });
   if (!ev) return;
   if (b.dataset.act === "fav") { toggleFav(ev); render(); }
-  if (b.dataset.act === "cal") {
-    var sat = state.data.weekStartsCovered[state.weekend];
-    window.open(gcalUrl(ev, sat, sundayOf(sat)), "_blank", "noopener");
-  }
 });
 
 // ---------------------------------------------------------------------------
