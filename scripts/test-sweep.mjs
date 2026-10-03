@@ -84,6 +84,9 @@ t("allowlist rejects a lookalike suffix", !isAllowedHost("https://not-930.com/x"
 t("allowlist rejects garbage", !isAllowedHost("javascript:alert(1)"));
 t("allowlist is non-trivial", ALLOWED_URL_HOSTS.length > 30);
 t("allowlist knows Union Stage's real domain", isAllowedHost("https://www.unionstagepresents.com/shows/x"));
+t("allowlist accepts ma.to listings", isAllowedHost("https://ma.to/events/washington/today"));
+t("ma.to ranks as an aggregator in dedup", urlScore("https://ma.to/e/123") === 0 && urlScore("https://www.arenastage.org/x") === 1);
+t("roundups track searches ma.to", /ma\.to\/events\/washington/.test(TRACKS.find((x) => x.num === 1).prompt));
 t("max_tokens leaves room for a full music track", MAX_TOKENS >= 32000);
 
 // ---------------------------------------------------------------------------
