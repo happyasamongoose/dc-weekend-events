@@ -94,7 +94,7 @@ export const THEATER_TRACK_CATEGORIES = ["theater", "music", "comedy"]; // track
 export const ALLOWED_URL_HOSTS = [
   // roundups / civic / city
   "washington.org", "dc.gov", "250.dc.gov", "dpr.dc.gov", "ddot.dc.gov", "events.dc.gov",
-  "dclibrary.org", "dclibrary.libnet.info", "nps.gov", "si.edu", "usbg.gov", "loc.gov",
+  "dclibrary.org", "dclibrary.libnet.info", "nps.gov", "si.edu", "usbg.gov", "loc.gov", "nbm.org",
   "kennedy-center.org", "nationalgeographic.org", "smithsonianmag.com",
   // waterfront / festival / market
   "wharfdc.com", "capitolriverfront.org", "navyyarddc.org", "downtowndc.org",
