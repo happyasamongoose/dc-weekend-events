@@ -87,6 +87,8 @@ t("allowlist knows Union Stage's real domain", isAllowedHost("https://www.unions
 t("allowlist accepts ma.to listings", isAllowedHost("https://ma.to/events/washington/today"));
 t("ma.to ranks as an aggregator in dedup", urlScore("https://ma.to/e/123") === 0 && urlScore("https://www.arenastage.org/x") === 1);
 t("roundups track searches ma.to", /ma\.to\/events\/washington/.test(TRACKS.find((x) => x.num === 1).prompt));
+t("roundups track makes the ma.to search mandatory and first", /FIRST search must be a site:ma\.to/.test(TRACKS.find((x) => x.num === 1).prompt));
+t("roundups track gets an extra search for it", TRACKS.find((x) => x.num === 1).maxSearches === 8);
 t("max_tokens leaves room for a full music track", MAX_TOKENS >= 32000);
 
 // ---------------------------------------------------------------------------
@@ -589,6 +591,10 @@ await scenario("s9", async () => {
   t("search-domain filter is off until a live run proves it", SEARCH_DOMAIN_FILTER === false);
   t("allowed_domains withheld while the filter is off", sent.tools[0].allowed_domains === undefined);
   t("usage accumulated across a track", usage.input === 10 && usage.output === 2 && usage.searches === 1);
+  await callModel({ system: "s", prompt: "p", apiKey: "k", fetchImpl: fake, log: quiet, maxSearches: 8 });
+  t("per-track max_uses reaches the API", sent.tools[0].max_uses === 8);
+  await callModel({ system: "s", prompt: "p", apiKey: "k", fetchImpl: fake, log: quiet });
+  t("default max_uses otherwise", sent.tools[0].max_uses === 6);
 }
 
 // ---------------------------------------------------------------------------

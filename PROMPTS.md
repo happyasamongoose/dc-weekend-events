@@ -90,6 +90,9 @@ Prioritize these curated local sources and their "this weekend" / "to do list" p
 - Washingtonian (washingtonian.com) things-to-do
 - City Cast DC (dc.citycast.fm)
 Capture festivals, street events, neighborhood happenings, markets, and one-offs.
+Your FIRST search must be a site:ma.to query for these weekend dates (for example
+"site:ma.to washington events {WEEKEND_LIST}") and you must read what it returns before
+searching anything else; then use the remaining searches on the other sources.
 ```
 
 ### Track 2 — Library + free/teen programming

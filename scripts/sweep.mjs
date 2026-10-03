@@ -184,6 +184,7 @@ Set "recurring": false for everything you search.`;
 export const TRACKS = [
   {
     num: 1, name: "roundups", weekly: true,
+    maxSearches: 8, // one is reserved for ma.to; the other sources keep their six
     prompt: `Find events on the Fri/Sat/Sun weekends starting {WEEKEND_LIST} in Washington DC, focusing on
 Capitol Hill, Southwest/The Wharf, Navy Yard/Ballpark, and Downtown/National Mall.
 Prioritize these curated local sources and their "this weekend" / "to do list" posts:
@@ -193,7 +194,10 @@ Prioritize these curated local sources and their "this weekend" / "to do list" p
 - DCist (dcist.com)
 - Washingtonian (washingtonian.com) things-to-do
 - City Cast DC (dc.citycast.fm)
-Capture festivals, street events, neighborhood happenings, markets, and one-offs.`
+Capture festivals, street events, neighborhood happenings, markets, and one-offs.
+Your FIRST search must be a site:ma.to query for these weekend dates (for example
+"site:ma.to washington events {WEEKEND_LIST}") and you must read what it returns before
+searching anything else; then use the remaining searches on the other sources.`
   },
   {
     num: 2, name: "library-free-teen", weekly: true,
@@ -940,10 +944,10 @@ export function searchQueriesIn(content) {
   return out;
 }
 
-export async function callModel({ system, prompt, apiKey, fetchImpl = nodeFetch, log = console.log, retryDelayMs = RETRY_DELAY_MS, searchDomains = null, usage = null, timeoutMs = REQUEST_TIMEOUT_MS }) {
+export async function callModel({ system, prompt, apiKey, fetchImpl = nodeFetch, log = console.log, retryDelayMs = RETRY_DELAY_MS, searchDomains = null, usage = null, timeoutMs = REQUEST_TIMEOUT_MS, maxSearches = null }) {
   const messages = [{ role: "user", content: prompt }];
   const searchTool = {
-    type: WEB_SEARCH_TOOL, name: "web_search", max_uses: MAX_SEARCHES_PER_TRACK
+    type: WEB_SEARCH_TOOL, name: "web_search", max_uses: maxSearches || MAX_SEARCHES_PER_TRACK
   };
   // (S1) tracks that read named venue calendars are capped to those domains.
   if (SEARCH_DOMAIN_FILTER && searchDomains && searchDomains.length) searchTool.allowed_domains = searchDomains;
@@ -1085,7 +1089,8 @@ export async function main(opts = {}) {
       log(`[track ${track.num} ${track.name}] weekends: ${weekendList}`);
       const text = await call({
         system: SYSTEM_PROMPT, prompt, apiKey, log,
-        searchDomains: track.searchDomains || null, usage
+        searchDomains: track.searchDomains || null, usage,
+        maxSearches: track.maxSearches || null
       });
       const raw = parseEventArray(text);
       if (!raw.length) {
